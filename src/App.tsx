@@ -201,11 +201,12 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
 }) {
   const exportToExcel = async (report: ExpenseReport) => {
     try {
-      const response = await fetch('/templates/expense_template.xlsx');
+      const templateUrl = `${import.meta.env.BASE_URL}templates/expense_template.xlsx`;
+      const response = await fetch(templateUrl);
       
       const contentType = response.headers.get('content-type');
       if (!response.ok || (contentType && contentType.includes('text/html'))) {
-        throw new Error('無法載入範本檔 (/templates/expense_template.xlsx)，請確認系統是否存在該檔案。');
+        throw new Error(`無法載入範本檔 (${templateUrl})，請確認系統是否存在該檔案。`);
       }
       
       const arrayBuffer = await response.arrayBuffer();

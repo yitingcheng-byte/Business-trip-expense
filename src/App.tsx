@@ -214,8 +214,11 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(arrayBuffer);
 
-      const ws = workbook.getWorksheet(1);
-      if (!ws) throw new Error('範本中找不到工作表');
+      const ws = workbook.worksheets[0];
+      if (!ws) {
+        const sheetInfo = workbook.worksheets ? workbook.worksheets.map(s => s.name).join(', ') : '無';
+        throw new Error(`範本中找不到任何工作表。目前共有 ${workbook.worksheets?.length || 0} 張工作表：[${sheetInfo}]`);
+      }
 
       const currencyMap: Record<string, string> = {
         'TWD': '台幣',

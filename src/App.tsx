@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import * as ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -225,7 +226,38 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       };
       const getCurrencyName = (c: string) => currencyMap[c] || c;
 
-      // Helper: Clone Row Style & Merges explicitly by row number
+      // Helper: ExcelJS spliceRows is known to destruct or misalign merges below insertion points. 
+      // We manually clear, splice, and safely re-apply all merges in the spreadsheet.
+      const safeInsertRows = (insertAtRow: number, numRows: number) => {
+        const existingMerges: any[] = [];
+        Object.values(ws._merges).forEach((m: any) => {
+          existingMerges.push({ top: m.top, bottom: m.bottom, left: m.left, right: m.right });
+        });
+
+        // Clear existing merges temporarily to avoid conflict
+        existingMerges.forEach(m => {
+          try { ws.unmergeCells(m.top, m.left, m.bottom, m.right); } catch {}
+        });
+
+        // Insert empty rows (values and some basic bounds get pushed)
+        ws.spliceRows(insertAtRow, 0, ...Array(numRows).fill([]));
+
+        // Re-apply merges with manual adjustment for those shifted down
+        existingMerges.forEach(m => {
+          let t = m.top;
+          let b = m.bottom;
+          if (t >= insertAtRow) {
+            t += numRows;
+            b += numRows;
+          } else if (b >= insertAtRow) {
+            // merge spanning across insertion point, expand height
+            b += numRows;
+          }
+          try { ws.mergeCells(t, m.left, b, m.right); } catch {}
+        });
+      };
+
+      // Helper: Clone Style & Merges explicitly for duplicated detail/totals rows
       const cloneRowStyleAndMerges = (sourceRowNum: number, targetRowNum: number) => {
         const sourceRow = ws.getRow(sourceRowNum);
         const targetRow = ws.getRow(targetRowNum);
@@ -233,14 +265,14 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         // Copy styles
         sourceRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
           const targetCell = targetRow.getCell(colNumber);
-          targetCell.style = cell.style; // Clone style reference (copy)
+          targetCell.style = cell.style; // Clone style reference
           targetCell.value = null; // Clear placeholder text
         });
 
-        // Copy row height
         targetRow.height = sourceRow.height;
 
-        // Copy row-specific merges
+        // Copy row-specific merges. 
+        // Note: The global shift has already happened, so we just duplicate the static properties of the source row.
         const sourceMerges: { left: number, right: number }[] = [];
         Object.values(ws._merges).forEach((merge: any) => {
           if (merge.top === sourceRowNum && merge.bottom === sourceRowNum) {
@@ -272,8 +304,8 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
 
       if (numItems > reservedDetailRows) {
         insertedDetailRows = numItems - reservedDetailRows;
-        // Insert new rows at row 11 (pushing totals and footer down)
-        ws.spliceRows(11, 0, ...Array(insertedDetailRows).fill([]));
+        // Insert new rows at row 11 (pushing totals and footer down) SAFELY
+        safeInsertRows(11, insertedDetailRows);
 
         // Format inserted blank rows by duplicating the last reserved template row (Row 10)
         for (let i = 0; i < insertedDetailRows; i++) {
@@ -373,8 +405,8 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         insertedTotalsRows = numCurrencies - 1;
         const insertTotalsAtRow = totalsDataRow + 1;
         
-        // Push rows below the totals data row down further
-        ws.spliceRows(insertTotalsAtRow, 0, ...Array(insertedTotalsRows).fill([]));
+        // Push rows below the totals data row down further SAFELY
+        safeInsertRows(insertTotalsAtRow, insertedTotalsRows);
 
         // Format these new inserted rows by cloning the first totals data row
         for (let i = 0; i < insertedTotalsRows; i++) {
@@ -421,8 +453,70 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         ws.pageSetup.printArea = undefined; // Do not cut off dynamically inserted rows
       }
 
-      const buffer = await workbook.xlsx.writeBuffer();
-      saveAs(new Blob([buffer]), `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
+      const newBuffer = await workbook.xlsx.writeBuffer();
+
+      // ====== 補回 ExcelJS 會丟失的固定元素 (Logo, Header/Footer, 設定) ======
+      // 讀取原始的 template buffer
+      const originZip = await JSZip.loadAsync(arrayBuffer.slice(0));
+      // 讀取 ExcelJS 產生出來的 modified buffer
+      const newZip = await JSZip.loadAsync(newBuffer);
+
+      // 取出工作表的 XML
+      const originSheetFile = originZip.file('xl/worksheets/sheet1.xml');
+      const newSheetFile = newZip.file('xl/worksheets/sheet1.xml');
+
+      if (originSheetFile && newSheetFile) {
+        let newSheetXml = await newSheetFile.async('string');
+        const originSheetXml = await originSheetFile.async('string');
+
+        // 從原始範本中擷取可能被 ExcelJS 丟失的區塊
+        const pageSetupMatch = originSheetXml.match(/<pageSetup[^>]*\/>/);
+        const printOptionsMatch = originSheetXml.match(/<printOptions[^>]*\/>/);
+        const headerFooterMatch = originSheetXml.match(/<headerFooter[\s\S]*?<\/headerFooter>/);
+        const drawingMatch = originSheetXml.match(/<drawing[^>]*\/>/);
+        const legacyDrawingMatch = originSheetXml.match(/<legacyDrawing[^>]*\/>/);
+        const pictureMatch = originSheetXml.match(/<picture[^>]*\/>/);
+        const pageMarginsMatch = originSheetXml.match(/<pageMargins[^>]*\/>/);
+
+        // 將 ExcelJS 產出的新 XML 中的對應區塊清除 (避免順序錯誤或重複)
+        newSheetXml = newSheetXml.replace(/<pageSetup[^>]*\/>/, '');
+        newSheetXml = newSheetXml.replace(/<printOptions[^>]*\/>/, '');
+        newSheetXml = newSheetXml.replace(/<headerFooter[\s\S]*?<\/headerFooter>/, '');
+        newSheetXml = newSheetXml.replace(/<drawing[^>]*\/>/, '');
+        newSheetXml = newSheetXml.replace(/<legacyDrawing[^>]*\/>/, '');
+        newSheetXml = newSheetXml.replace(/<picture[^>]*\/>/, '');
+        newSheetXml = newSheetXml.replace(/<pageMargins[^>]*\/>/, '');
+
+        // 將原始完好的區塊依照嚴格 XML 排序重新注入到表尾
+        const injectBlocks = [
+          printOptionsMatch?.[0], 
+          pageMarginsMatch?.[0], 
+          pageSetupMatch?.[0], 
+          headerFooterMatch?.[0], 
+          drawingMatch?.[0], 
+          legacyDrawingMatch?.[0], 
+          pictureMatch?.[0]
+        ].filter(Boolean).join('');
+
+        newSheetXml = newSheetXml.replace('</worksheet>', `${injectBlocks}</worksheet>`);
+
+        // 把修改過的、完美融合的 XML 存回原始的 ZIP 結構中
+        originZip.file('xl/worksheets/sheet1.xml', newSheetXml);
+        
+        // 因為 ExcelJS 會改變字串表與樣式索引，必須把這兩者也同步過來
+        const newStyles = await newZip.file('xl/styles.xml')?.async('uint8array');
+        if (newStyles) originZip.file('xl/styles.xml', newStyles);
+        
+        const newStrings = await newZip.file('xl/sharedStrings.xml')?.async('uint8array');
+        if (newStrings) originZip.file('xl/sharedStrings.xml', newStrings);
+
+        // 重新輸出不失真的 Excel
+        const finalBuffer = await originZip.generateAsync({ type: 'array' });
+        saveAs(new Blob([finalBuffer]), `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
+      } else {
+        // Fallback: 如果壓縮檔結構異常，直接使用 excelJS 的版本
+        saveAs(new Blob([newBuffer]), `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
+      }
 
     } catch (e) {
       console.error(e);

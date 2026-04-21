@@ -25,7 +25,8 @@ import {
   Save
 } from 'lucide-react';
 import { format } from 'date-fns';
-import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -198,216 +199,190 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
   onDelete: (id: string) => void,
   key?: string 
 }) {
-  const exportToExcel = (report: ExpenseReport) => {
-    const wb = XLSX.utils.book_new();
-    
-    // Calculate totals for summary blocks
-    const expenseTotals: Record<string, number> = {};
-    report.items.forEach(item => {
-      expenseTotals[item.currency] = (expenseTotals[item.currency] || 0) + item.amount;
-    });
-
-    const prepaidTotals: Record<string, number> = {};
-    (report.prepaidItems || []).forEach(p => {
-      prepaidTotals[p.currency] = (prepaidTotals[p.currency] || 0) + p.amount;
-    });
-
-    const allCurrencies = Array.from(new Set([
-      ...Object.keys(expenseTotals),
-      ...Object.keys(prepaidTotals)
-    ]));
-
-    // Build the grid
-    const data: any[][] = [];
-
-    const currencyMap: Record<string, string> = {
-      'TWD': '台幣',
-      'USD': '美金',
-      'JPY': '日幣',
-      'EUR': '歐元',
-      'CNY': '人民幣',
-      'HKD': '港幣',
-      'GBP': '英鎊',
-    };
-    const getCurrencyName = (c: string) => currencyMap[c] || c;
-
-    // Header Row 13 (using 0 as start for simplicity, though picture shows 13)
-    const headerRow = Array(33).fill("");
-    headerRow[0] = "出差人：";
-    headerRow[2] = report.employeeName;
-    headerRow[4] = "工號：";
-    headerRow[6] = report.employeeId;
-    headerRow[8] = "單位：";
-    headerRow[10] = report.unit;
-    headerRow[15] = "部門：";
-    headerRow[17] = report.department;
-    headerRow[21] = "出差期間：";
-    headerRow[24] = `${report.startDate}~${report.endDate}`;
-    data.push(headerRow);
-
-    // Table Header Row 14
-    const tableHeader1 = Array(33).fill("");
-    tableHeader1[0] = "日期";
-    tableHeader1[2] = "行程";
-    tableHeader1[12] = "報支金額";
-    tableHeader1[24] = "專案代號 (備註6)";
-    tableHeader1[27] = "交通工具";
-    data.push(tableHeader1);
-
-    // Table Header Row 15
-    const tableHeader2 = Array(33).fill("");
-    tableHeader2[2] = "地點";
-    tableHeader2[6] = "費用說明(備註5)";
-    tableHeader2[12] = "幣別";
-    tableHeader2[14] = "交通費";
-    tableHeader2[16] = "住宿費";
-    tableHeader2[18] = "膳雜費";
-    tableHeader2[20] = "交際費";
-    tableHeader2[22] = "其他費用";
-    data.push(tableHeader2);
-
-    // Data Rows
-    report.items.forEach((item, index) => {
-      const row = Array(33).fill("");
-      row[0] = item.date;
-      row[2] = item.location;
-      row[6] = item.description.trim() || item.category;
-      row[12] = getCurrencyName(item.currency);
-      if (item.category === '交通費') row[14] = item.amount;
-      if (item.category === '住宿費') row[16] = item.amount;
-      if (item.category === '膳雜費') row[18] = item.amount;
-      if (item.category === '交際費') row[20] = item.amount;
-      if (item.category === '其他費用') row[22] = item.amount;
-      row[24] = item.projectCode;
-      if (item.category === '交通費') {
-        row[27] = item.transportMode;
-      }
-      data.push(row);
-    });
-
-    // Spacer
-    data.push([]);
-
-    // Footer Headers
-    const footerHeader = Array(30).fill("");
-    footerHeader[0] = "費用報支合計";
-    footerHeader[5] = "幣別";
-    footerHeader[7] = "合計";
-    footerHeader[10] = "已先預支費用";
-    footerHeader[15] = "幣別";
-    footerHeader[17] = "合計";
-    footerHeader[20] = "應付員工或員工繳回";
-    footerHeader[25] = "幣別";
-    footerHeader[27] = "合計";
-    data.push(footerHeader);
-
-    // Footer Calculations
-    allCurrencies.forEach(curr => {
-      const exp = expenseTotals[curr] || 0;
-      const pre = prepaidTotals[curr] || 0;
-      const diff = exp - pre;
+  const exportToExcel = async (report: ExpenseReport) => {
+    try {
+      const response = await fetch('/templates/expense_template.xlsx');
       
-      const row = Array(30).fill("");
-      // Expenses
-      if (expenseTotals[curr] !== undefined) {
-        row[5] = getCurrencyName(curr);
-        row[7] = exp;
+      const contentType = response.headers.get('content-type');
+      if (!response.ok || (contentType && contentType.includes('text/html'))) {
+        throw new Error('無法載入範本檔 (/templates/expense_template.xlsx)，請確認系統是否存在該檔案。');
       }
-      // Prepaid
-      if (prepaidTotals[curr] !== undefined) {
-        row[15] = getCurrencyName(curr);
-        row[17] = pre;
+      
+      const arrayBuffer = await response.arrayBuffer();
+
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(arrayBuffer);
+
+      const ws = workbook.getWorksheet(1);
+      if (!ws) throw new Error('範本中找不到工作表');
+
+      const currencyMap: Record<string, string> = {
+        'TWD': '台幣',
+        'USD': '美金',
+        'JPY': '日幣',
+        'EUR': '歐元',
+        'CNY': '人民幣',
+        'HKD': '港幣',
+        'GBP': '英鎊',
+      };
+      const getCurrencyName = (c: string) => currencyMap[c] || c;
+
+      // 1. Fill base data (Row 13, per original layout logic mapping)
+      ws.getCell('C13').value = report.employeeName;
+      ws.getCell('G13').value = report.employeeId;
+      ws.getCell('K13').value = report.unit;
+      ws.getCell('R13').value = report.department;
+      ws.getCell('Y13').value = `${report.startDate} ~ ${report.endDate}`;
+
+      // 2. Data Rows (Start at Row 16 based on layout where 14-15 are table headers)
+      const dataStartRow = 16;
+      const numItems = report.items.length;
+
+      // Pre-calculate merged arrays for items
+      const itemMerges = [
+        ['A', 'B'], ['C', 'F'], ['G', 'L'], ['M', 'N'],
+        ['O', 'P'], ['Q', 'R'], ['S', 'T'], ['U', 'V'],
+        ['W', 'X'], ['Y', 'AA'], ['AB', 'AD']
+      ];
+
+      if (numItems > 1) {
+        // Insert empty rows for the extra items, pushing footer down
+        ws.spliceRows(dataStartRow + 1, 0, ...Array(numItems - 1).fill([]));
       }
-      // Balance
-      row[25] = getCurrencyName(curr);
-      row[27] = diff;
-      data.push(row);
-    });
 
-    const ws = XLSX.utils.aoa_to_sheet(data);
+      report.items.forEach((item, index) => {
+        const r = dataStartRow + index;
+        const row = ws.getRow(r);
 
-    // Define merges based on exact user specification
-    ws['!merges'] = [
-      // Row 0 Header
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }, // 出差人： (2 cells)
-      { s: { r: 0, c: 2 }, e: { r: 0, c: 3 } }, // Employee Name (2 cells)
-      { s: { r: 0, c: 4 }, e: { r: 0, c: 5 } }, // 工號： (2 cells)
-      { s: { r: 0, c: 6 }, e: { r: 0, c: 7 } }, // Employee ID (2 cells)
-      { s: { r: 0, c: 8 }, e: { r: 0, c: 9 } }, // 單位： (2 cells)
-      { s: { r: 0, c: 10 }, e: { r: 0, c: 14 } }, // Unit Value (5 cells)
-      { s: { r: 0, c: 15 }, e: { r: 0, c: 16 } }, // 部門： (2 cells)
-      { s: { r: 0, c: 17 }, e: { r: 0, c: 20 } }, // Dept Value (4 cells)
-      { s: { r: 0, c: 21 }, e: { r: 0, c: 23 } }, // 出差期間： (3 cells)
-      { s: { r: 0, c: 24 }, e: { r: 0, c: 29 } }, // Date Range (6 cells)
+        // If it's a duplicated row, copy styles
+        if (index > 0) {
+          for (let c = 1; c <= 30; c++) {
+            row.getCell(c).style = ws.getCell(dataStartRow, c).style;
+          }
+        }
 
-      // Table Headers
-      { s: { r: 1, c: 0 }, e: { r: 2, c: 1 } }, // 日期 (2 cells)
-      { s: { r: 1, c: 2 }, e: { r: 1, c: 11 } }, // 行程 label
-      { s: { r: 2, c: 2 }, e: { r: 2, c: 5 } }, // 地點 (4 cells)
-      { s: { r: 2, c: 6 }, e: { r: 2, c: 11 } }, // 費用說明 (6 cells)
-      
-      { s: { r: 1, c: 12 }, e: { r: 1, c: 23 } }, // 報費金額 label
-      { s: { r: 2, c: 12 }, e: { r: 2, c: 13 } }, // 幣別 (2 cells)
-      { s: { r: 2, c: 14 }, e: { r: 2, c: 15 } }, // 交通費
-      { s: { r: 2, c: 16 }, e: { r: 2, c: 17 } }, // 住宿費
-      { s: { r: 2, c: 18 }, e: { r: 2, c: 19 } }, // 膳雜費
-      { s: { r: 2, c: 20 }, e: { r: 2, c: 21 } }, // 交際費
-      { s: { r: 2, c: 22 }, e: { r: 2, c: 23 } }, // 其他費用
-      
-      { s: { r: 1, c: 24 }, e: { r: 2, c: 26 } }, // 專案代號 (3 cells: 24, 25, 26)
-      { s: { r: 1, c: 27 }, e: { r: 2, c: 29 } }, // 交通工具 (3 cells: 27, 28, 29)
-    ];
+        // Apply column merges
+        itemMerges.forEach(([startCol, endCol]) => {
+          try { ws.mergeCells(`${startCol}${r}:${endCol}${r}`); } catch {}
+        });
 
-    // Merge data rows
-    const startRow = 3;
-    report.items.forEach((_, i) => {
-      const r = startRow + i;
-      ws['!merges']?.push(
-        { s: { r: r, c: 0 }, e: { r: r, c: 1 } }, // 日期
-        { s: { r: r, c: 2 }, e: { r: r, c: 5 } }, // 地點
-        { s: { r: r, c: 6 }, e: { r: r, c: 11 } }, // 費用說明
-        { s: { r: r, c: 12 }, e: { r: r, c: 13 } }, // 幣別
-        { s: { r: r, c: 14 }, e: { r: r, c: 15 } }, // 交通費
-        { s: { r: r, c: 16 }, e: { r: r, c: 17 } }, // 住宿費
-        { s: { r: r, c: 18 }, e: { r: r, c: 19 } }, // 膳雜費
-        { s: { r: r, c: 20 }, e: { r: r, c: 21 } }, // 交際費
-        { s: { r: r, c: 22 }, e: { r: r, c: 23 } }, // 其他費用
-        { s: { r: r, c: 24 }, e: { r: r, c: 26 } }, // 專案代號
-        { s: { r: r, c: 27 }, e: { r: r, c: 29 } }  // 交通工具
-      );
-    });
+        // Populate values
+        row.getCell('A').value = item.date;
+        row.getCell('C').value = item.location;
+        row.getCell('G').value = item.description.trim() || item.category;
+        row.getCell('M').value = getCurrencyName(item.currency);
+        
+        row.getCell('O').value = item.category === '交通費' ? item.amount : '';
+        row.getCell('Q').value = item.category === '住宿費' ? item.amount : '';
+        row.getCell('S').value = item.category === '膳雜費' ? item.amount : '';
+        row.getCell('U').value = item.category === '交際費' ? item.amount : '';
+        row.getCell('W').value = item.category === '其他費用' ? item.amount : '';
+        
+        row.getCell('Y').value = item.projectCode;
+        row.getCell('AB').value = item.category === '交通費' ? item.transportMode : '';
 
-    // Footer Merges
-    const footerStart = startRow + report.items.length + 1;
-    ws['!merges']?.push(
-      { s: { r: footerStart, c: 0 }, e: { r: footerStart, c: 4 } }, // 合計 label (5 cells)
-      { s: { r: footerStart, c: 5 }, e: { r: footerStart, c: 6 } }, // 幣別 subheader
-      { s: { r: footerStart, c: 7 }, e: { r: footerStart, c: 9 } }, // 合計 subheader (3 cells: 7, 8, 9)
-      { s: { r: footerStart, c: 10 }, e: { r: footerStart, c: 14 } }, // 預支 label (5 cells: 10, 11, 12, 13, 14)
-      { s: { r: footerStart, c: 15 }, e: { r: footerStart, c: 16 } }, // 幣別 subheader
-      { s: { r: footerStart, c: 17 }, e: { r: footerStart, c: 19 } }, // 合計 subheader (3 cells)
-      { s: { r: footerStart, c: 20 }, e: { r: footerStart, c: 24 } }, // 結報 label (5 cells)
-      { s: { r: footerStart, c: 25 }, e: { r: footerStart, c: 26 } }, // 幣別 subheader
-      { s: { r: footerStart, c: 27 }, e: { r: footerStart, c: 29 } }  // 合計 subheader (3 cells)
-    );
+        // Dynamic Row Height Calculation
+        const descCell = row.getCell('G');
+        const descLength = String(descCell.value).length;
+        // Estimate ~15 full width chars per line. Base row height ~20.
+        const lineCount = Math.max(1, Math.ceil(descLength / 15));
+        row.height = Math.max(20, Math.ceil(lineCount * 18));
+        
+        // Enforce wrap text just in case template cell missed it
+        if (!descCell.alignment) descCell.alignment = {};
+        descCell.alignment = { ...descCell.alignment, wrapText: true, vertical: 'top' };
+        
+        const locCell = row.getCell('C');
+        if (!locCell.alignment) locCell.alignment = {};
+        locCell.alignment = { ...locCell.alignment, wrapText: true, vertical: 'top' };
+      });
 
-    allCurrencies.forEach((_, i) => {
-      const r = footerStart + 1 + i;
-      ws['!merges']?.push(
-        { s: { r: r, c: 0 }, e: { r: r, c: 4 } }, // Spacer (5 cells)
-        { s: { r: r, c: 5 }, e: { r: r, c: 6 } }, // 幣別
-        { s: { r: r, c: 7 }, e: { r: r, c: 9 } }, // 合計 (3 cells)
-        { s: { r: r, c: 10 }, e: { r: r, c: 14 } }, // Spacer (5 cells)
-        { s: { r: r, c: 15 }, e: { r: r, c: 16 } }, // 幣別
-        { s: { r: r, c: 17 }, e: { r: r, c: 19 } }, // 合計 (3 cells)
-        { s: { r: r, c: 20 }, e: { r: r, c: 24 } }, // Spacer (5 cells)
-        { s: { r: r, c: 25 }, e: { r: r, c: 26 } }, // 幣別
-        { s: { r: r, c: 27 }, e: { r: r, c: 29 } }  // 合計 (3 cells)
-      );
-    });
+      // 3. Totals Area
+      // The spacer originally at row 17, footer header at 18, so dynamic footer data row is at 19 internally (if 1 item).
+      const footerDataRow = 18 + numItems; 
 
-    XLSX.utils.book_append_sheet(wb, ws, '報銷明細');
-    XLSX.writeFile(wb, `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
+      const expenseTotals: Record<string, number> = {};
+      report.items.forEach(item => {
+        expenseTotals[item.currency] = (expenseTotals[item.currency] || 0) + item.amount;
+      });
+
+      const prepaidTotals: Record<string, number> = {};
+      (report.prepaidItems || []).forEach(p => {
+        prepaidTotals[p.currency] = (prepaidTotals[p.currency] || 0) + p.amount;
+      });
+
+      const allCurrencies = Array.from(new Set([
+        ...Object.keys(expenseTotals),
+        ...Object.keys(prepaidTotals)
+      ]));
+
+      const numCurrencies = Math.max(1, allCurrencies.length);
+
+      if (numCurrencies > 1) {
+        ws.spliceRows(footerDataRow + 1, 0, ...Array(numCurrencies - 1).fill([]));
+      }
+
+      const footerMerges = [
+        ['A', 'E'], ['F', 'G'], ['H', 'J'],
+        ['K', 'O'], ['P', 'Q'], ['R', 'T'],
+        ['U', 'Y'], ['Z', 'AA'], ['AB', 'AD']
+      ];
+
+      (allCurrencies.length > 0 ? allCurrencies : ['TWD']).forEach((curr, i) => {
+        const r = footerDataRow + i;
+        const row = ws.getRow(r);
+
+        if (i > 0) {
+          for (let c = 1; c <= 30; c++) {
+            row.getCell(c).style = ws.getCell(footerDataRow, c).style;
+          }
+        }
+
+        footerMerges.forEach(([startCol, endCol]) => {
+          try { ws.mergeCells(`${startCol}${r}:${endCol}${r}`); } catch {}
+        });
+
+        const exp = expenseTotals[curr] || 0;
+        const pre = prepaidTotals[curr] || 0;
+        const diff = exp - pre;
+
+        if (expenseTotals[curr] !== undefined) {
+          row.getCell('F').value = getCurrencyName(curr);
+          row.getCell('H').value = exp;
+        } else {
+          row.getCell('F').value = '';
+          row.getCell('H').value = '';
+        }
+
+        if (prepaidTotals[curr] !== undefined) {
+          row.getCell('P').value = getCurrencyName(curr);
+          row.getCell('R').value = pre;
+        } else {
+          row.getCell('P').value = '';
+          row.getCell('R').value = '';
+        }
+
+        row.getCell('Z').value = getCurrencyName(curr);
+        row.getCell('AB').value = diff;
+      });
+
+      // 4. Print & Page Setup overrides (Ensuring A4 formatting)
+      if (ws.pageSetup) {
+        ws.pageSetup.paperSize = 9; // A4
+        ws.pageSetup.fitToPage = true;
+        ws.pageSetup.fitToWidth = 1;
+        ws.pageSetup.fitToHeight = 0; // Allows growing downward across multiple pages
+        ws.pageSetup.printArea = undefined; // Clear any hardcoded print areas that might cut off extra rows
+      }
+
+      // Generate the export buffer and trigger download
+      const buffer = await workbook.xlsx.writeBuffer();
+      saveAs(new Blob([buffer]), `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
+
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : '匯出失敗，請確認是否已有準備好制式範本檔。');
+    }
   };
 
   return (

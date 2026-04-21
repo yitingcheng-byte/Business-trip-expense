@@ -25,7 +25,7 @@ import {
   Save
 } from 'lucide-react';
 import { format } from 'date-fns';
-import * as ExcelJS from 'exceljs';
+import XlsxPopulate from 'xlsx-populate/browser/xlsx-populate';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { motion, AnimatePresence } from 'motion/react';
@@ -212,311 +212,252 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       
       const arrayBuffer = await response.arrayBuffer();
 
-      const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(arrayBuffer);
-
-      const ws = workbook.worksheets[0];
-      if (!ws) {
-        const sheetInfo = workbook.worksheets ? workbook.worksheets.map(s => s.name).join(', ') : '無';
-        throw new Error(`範本中找不到任何工作表。目前共有 ${workbook.worksheets?.length || 0} 張工作表：[${sheetInfo}]`);
-      }
-
-      const currencyMap: Record<string, string> = {
-        'TWD': '台幣', 'USD': '美金', 'JPY': '日幣', 'EUR': '歐元', 'CNY': '人民幣', 'HKD': '港幣', 'GBP': '英鎊'
-      };
-      const getCurrencyName = (c: string) => currencyMap[c] || c;
-
-      // Helper: ExcelJS spliceRows is known to destruct or misalign merges below insertion points. 
-      // We manually clear, splice, and safely re-apply all merges in the spreadsheet.
-      const safeInsertRows = (insertAtRow: number, numRows: number) => {
-        const existingMerges: any[] = [];
-        Object.values(ws._merges).forEach((m: any) => {
-          existingMerges.push({ top: m.top, bottom: m.bottom, left: m.left, right: m.right });
-        });
-
-        // Clear existing merges temporarily to avoid conflict
-        existingMerges.forEach(m => {
-          try { ws.unmergeCells(m.top, m.left, m.bottom, m.right); } catch {}
-        });
-
-        // Insert empty rows (values and some basic bounds get pushed)
-        ws.spliceRows(insertAtRow, 0, ...Array(numRows).fill([]));
-
-        // Re-apply merges with manual adjustment for those shifted down
-        existingMerges.forEach(m => {
-          let t = m.top;
-          let b = m.bottom;
-          if (t >= insertAtRow) {
-            t += numRows;
-            b += numRows;
-          } else if (b >= insertAtRow) {
-            // merge spanning across insertion point, expand height
-            b += numRows;
-          }
-          try { ws.mergeCells(t, m.left, b, m.right); } catch {}
-        });
-      };
-
-      // Helper: Clone Style & Merges explicitly for duplicated detail/totals rows
-      const cloneRowStyleAndMerges = (sourceRowNum: number, targetRowNum: number) => {
-        const sourceRow = ws.getRow(sourceRowNum);
-        const targetRow = ws.getRow(targetRowNum);
-
-        // Copy styles
-        sourceRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-          const targetCell = targetRow.getCell(colNumber);
-          targetCell.style = cell.style; // Clone style reference
-          targetCell.value = null; // Clear placeholder text
-        });
-
-        targetRow.height = sourceRow.height;
-
-        // Copy row-specific merges. 
-        // Note: The global shift has already happened, so we just duplicate the static properties of the source row.
-        const sourceMerges: { left: number, right: number }[] = [];
-        Object.values(ws._merges).forEach((merge: any) => {
-          if (merge.top === sourceRowNum && merge.bottom === sourceRowNum) {
-             sourceMerges.push({ left: merge.left, right: merge.right });
-          }
-        });
-
-        sourceMerges.forEach(m => {
-          try {
-            ws.mergeCells(targetRowNum, m.left, targetRowNum, m.right);
-          } catch (e) {
-            // Ignore if already merged
-          }
-        });
-      };
-
-      // -- 【A. 表頭區 Mapping】 --
-      ws.getCell('C1').value = report.employeeName;
-      ws.getCell('G1').value = report.employeeId;
-      ws.getCell('K1').value = report.unit;
-      ws.getCell('R1').value = report.department;
-      ws.getCell('Y1').value = `${report.startDate} ~ ${report.endDate}`;
-
-      // -- 【B. 明細區 Mapping & 自動插列】 --
+      // 1. Analyze structure first using XlsxPopulate memory buffer
+      let wb = await XlsxPopulate.fromDataAsync(arrayBuffer);
+      let ws = wb.sheet(0);
+      
+      // Find anchors dynamically
       const detailStartRow = 5;
-      const reservedDetailRows = 6; // Template defines rows 5 ~ 10
+      const reservedDetailRows = 6; 
+      
+      let totalsBaseRow = 11; // default fallback
+      for (let r = 5; r <= 100; r++) {
+        const valA = String(ws.cell(`A${r}`).value() || '');
+        const valF = String(ws.cell(`F${r}`).value() || '');
+        const valK = String(ws.cell(`K${r}`).value() || '');
+        if (valA.includes('費用報支合計') || valF.includes('費用報支合計') || valK.includes('預支費用')) {
+          totalsBaseRow = r;
+          break;
+        }
+      }
+
+      // Calculate insertions
       const numItems = report.items.length;
-      let insertedDetailRows = 0;
-
-      if (numItems > reservedDetailRows) {
-        insertedDetailRows = numItems - reservedDetailRows;
-        // Insert new rows at row 11 (pushing totals and footer down) SAFELY
-        safeInsertRows(11, insertedDetailRows);
-
-        // Format inserted blank rows by duplicating the last reserved template row (Row 10)
-        for (let i = 0; i < insertedDetailRows; i++) {
-          cloneRowStyleAndMerges(10, 11 + i);
-        }
-      }
-
-      // Write detail data row by row
-      report.items.forEach((item, index) => {
-        const r = detailStartRow + index;
-        const row = ws.getRow(r);
-
-        ws.getCell(`A${r}`).value = item.date;
-        ws.getCell(`C${r}`).value = item.location;
-        ws.getCell(`G${r}`).value = item.description.trim() || item.category;
-        ws.getCell(`M${r}`).value = getCurrencyName(item.currency);
-        
-        ws.getCell(`O${r}`).value = item.category === '交通費' ? item.amount : '';
-        ws.getCell(`Q${r}`).value = item.category === '住宿費' ? item.amount : '';
-        ws.getCell(`S${r}`).value = item.category === '膳雜費' ? item.amount : '';
-        ws.getCell(`U${r}`).value = item.category === '交際費' ? item.amount : '';
-        ws.getCell(`W${r}`).value = item.category === '其他費用' ? item.amount : '';
-        
-        ws.getCell(`Y${r}`).value = item.projectCode;
-        ws.getCell(`AB${r}`).value = item.category === '交通費' ? item.transportMode : '';
-
-        // Text wrap and dynamic height
-        const descCell = ws.getCell(`G${r}`);
-        const locCell = ws.getCell(`C${r}`);
-
-        // Ensure text wrap is on
-        if (!descCell.alignment) descCell.alignment = {};
-        descCell.alignment = { ...descCell.alignment, wrapText: true, vertical: 'top' };
-        
-        if (!locCell.alignment) locCell.alignment = {};
-        locCell.alignment = { ...locCell.alignment, wrapText: true, vertical: 'top' };
-
-        // Auto height calculation
-        const descLen = String(descCell.value).length;
-        const locLen = String(locCell.value).length;
-        const maxLen = Math.max(descLen, locLen);
-        const lineCount = Math.max(1, Math.ceil(maxLen / 15)); // Estimate 15 full width chars
-        row.height = Math.max(20, Math.ceil(lineCount * 18));
-      });
-
-      // Clear any unused pre-reserved rows (so they stay blank, keeping layout)
-      if (numItems < reservedDetailRows) {
-        for (let i = numItems; i < reservedDetailRows; i++) {
-          const r = detailStartRow + i;
-          ws.getCell(`A${r}`).value = '';
-          ws.getCell(`C${r}`).value = '';
-          ws.getCell(`G${r}`).value = '';
-          ws.getCell(`M${r}`).value = '';
-          ws.getCell(`O${r}`).value = '';
-          ws.getCell(`Q${r}`).value = '';
-          ws.getCell(`S${r}`).value = '';
-          ws.getCell(`U${r}`).value = '';
-          ws.getCell(`W${r}`).value = '';
-          ws.getCell(`Y${r}`).value = '';
-          ws.getCell(`AB${r}`).value = '';
-        }
-      }
-
-      // -- 【C. 合計區 Mapping & 自動插列】 --
-      // Totals were originally at row 11 (title F11/K11/U11) and 12 (data F12/H12, P12/R12, Z12/AB12)
-      // If we inserted details rows at row 11, the totals block got pushed down
-      const totalsTitleRow = 11 + insertedDetailRows;
-      const totalsDataRow = totalsTitleRow + 1; // originally row 12
-
-      const expenseTotals: Record<string, number> = {};
-      const prepaidTotals: Record<string, number> = {};
-      const netTotals: Record<string, number> = {};
-
+      const detailInsertCount = Math.max(0, numItems - reservedDetailRows);
+      
+      const expenseTotals = {};
+      const prepaidTotals = {};
       report.items.forEach(item => {
         expenseTotals[item.currency] = (expenseTotals[item.currency] || 0) + item.amount;
       });
       (report.prepaidItems || []).forEach(p => {
         prepaidTotals[p.currency] = (prepaidTotals[p.currency] || 0) + p.amount;
       });
-
-      // Find unique currencies
-      const allCurrencies = Array.from(new Set([
-        ...Object.keys(expenseTotals),
-        ...Object.keys(prepaidTotals)
-      ]));
-
-      // Calculate net difference
-      allCurrencies.forEach(curr => {
-        netTotals[curr] = (expenseTotals[curr] || 0) - (prepaidTotals[curr] || 0);
-      });
-
-      // If more than 1 currency, we need to insert rows in the totals block
+      const allCurrencies = Array.from(new Set([...Object.keys(expenseTotals), ...Object.keys(prepaidTotals)]));
       const numCurrencies = Math.max(1, allCurrencies.length);
-      let insertedTotalsRows = 0;
+      const totalsInsertCount = Math.max(0, numCurrencies - 1);
 
-      if (numCurrencies > 1) {
-        insertedTotalsRows = numCurrencies - 1;
-        const insertTotalsAtRow = totalsDataRow + 1;
-        
-        // Push rows below the totals data row down further SAFELY
-        safeInsertRows(insertTotalsAtRow, insertedTotalsRows);
+      // 2. Perform safe shift natively on XML via JSZip to guarantee 100% preservation
+      const zip = await JSZip.loadAsync(arrayBuffer);
 
-        // Format these new inserted rows by cloning the first totals data row
-        for (let i = 0; i < insertedTotalsRows; i++) {
-          cloneRowStyleAndMerges(totalsDataRow, insertTotalsAtRow + i);
+      const insertRowsInSheet = async (targetZip, insertAt, shiftCount, cloneRow) => {
+        if (shiftCount <= 0) return;
+        const sheetPath = 'xl/worksheets/sheet1.xml';
+        const file = targetZip.file(sheetPath);
+        if (!file) return;
+        const xmlStr = await file.async('string');
+
+        // Simple DOMParser in browser
+        const doc = new DOMParser().parseFromString(xmlStr, 'application/xml');
+        const sheetData = doc.getElementsByTagName('sheetData')[0];
+        if (!sheetData) return;
+
+        const rows = Array.from(sheetData.getElementsByTagName('row'));
+
+        // Shift down existing rows that are at or below insertAt
+        rows.forEach(row => {
+          const rAttr = parseInt(row.getAttribute('r') || '0', 10);
+          if (rAttr >= insertAt) {
+            row.setAttribute('r', String(rAttr + shiftCount));
+            const cells = Array.from(row.getElementsByTagName('c'));
+            cells.forEach(c => {
+              const ref = c.getAttribute('r');
+              if (ref) c.setAttribute('r', ref.replace(/([A-Z]+)(\d+)/, (_, col, rowNum) => `${col}${parseInt(rowNum) + shiftCount}`));
+            });
+          }
+        });
+
+        // Clone the template row
+        let templateRowNode = rows.find(r => parseInt(r.getAttribute('r') || '0', 10) === cloneRow);
+        if (templateRowNode) {
+           for (let i = 0; i < shiftCount; i++) {
+             const newRow = templateRowNode.cloneNode(true) as Element;
+             const newRowNum = insertAt + i;
+             newRow.setAttribute('r', String(newRowNum));
+
+             const cells = Array.from(newRow.getElementsByTagName('c'));
+             cells.forEach((c: any) => {
+               const ref = c.getAttribute('r');
+               if (ref) c.setAttribute('r', ref.replace(/([A-Z]+)(\d+)/, (_, col) => `${col}${newRowNum}`));
+               c.removeAttribute('t'); 
+               Array.from(c.getElementsByTagName('v')).forEach((n: any) => n.remove());
+               Array.from(c.getElementsByTagName('is')).forEach((n: any) => n.remove());
+             });
+
+             const allCurrentRows = Array.from(sheetData.getElementsByTagName('row'));
+             const nextRow = allCurrentRows.find(r => parseInt(r.getAttribute('r') || '0', 10) > newRowNum);
+             if (nextRow) sheetData.insertBefore(newRow, nextRow);
+             else sheetData.appendChild(newRow);
+           }
         }
+
+        // Shift and Duplicate Merged Cells
+        const mergeCellsNode = doc.getElementsByTagName('mergeCells')[0];
+        if (mergeCellsNode) {
+          const merges = Array.from(mergeCellsNode.getElementsByTagName('mergeCell'));
+          const newMerges = [];
+
+          merges.forEach(m => {
+            const ref = m.getAttribute('ref');
+            if (!ref) return;
+            const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+            if (!match) return;
+            
+            let [, startCol, startRowStr, endCol, endRowStr] = match;
+            let startRow = parseInt(startRowStr, 10);
+            let endRow = parseInt(endRowStr, 10);
+
+            if (startRow >= insertAt) {
+              m.setAttribute('ref', `${startCol}${startRow + shiftCount}:${endCol}${endRow + shiftCount}`);
+            } else if (startRow <= cloneRow && endRow >= cloneRow) {
+              if (startRow === endRow) {
+                // Horizontal line merge -> duplicate for new rows
+                for (let i = 0; i < shiftCount; i++) {
+                  newMerges.push(`${startCol}${insertAt + i}:${endCol}${insertAt + i}`);
+                }
+              } else if (endRow >= insertAt) {
+                // Spans vertically past insertion point -> stretch it
+                m.setAttribute('ref', `${startCol}${startRow}:${endCol}${endRow + shiftCount}`);
+              }
+            }
+          });
+
+          newMerges.forEach(ref => {
+            const mNode = doc.createElement('mergeCell');
+            mNode.setAttribute('ref', ref);
+            mergeCellsNode.appendChild(mNode);
+          });
+          mergeCellsNode.setAttribute('count', String(mergeCellsNode.children.length));
+        }
+
+        const finalXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + new XMLSerializer().serializeToString(doc);
+        targetZip.file(sheetPath, finalXml);
+      };
+
+      const shiftDrawings = async (targetZip, insertAt, shiftCount) => {
+         if (shiftCount <= 0) return;
+         const drawingFiles = Object.keys(targetZip.files).filter(k => k.startsWith('xl/drawings/drawing') && k.endsWith('.xml'));
+         for (const file of drawingFiles) {
+             let xmlStr = await targetZip.file(file)?.async('string');
+             if (!xmlStr) continue;
+             
+             // Drawing rows are 0-indexed in XML. So row 11 is represented as 10.
+             xmlStr = xmlStr.replace(/<xdr:row>(\d+)<\/xdr:row>/g, (match, rStr) => {
+                 let r = parseInt(rStr, 10);
+                 if (r >= (insertAt - 1)) r += shiftCount;
+                 return `<xdr:row>${r}</xdr:row>`;
+             });
+             targetZip.file(file, xmlStr);
+         }
+      };
+
+      let currentTotalsBaseRow = totalsBaseRow;
+      
+      // A. Insert Details
+      if (detailInsertCount > 0) {
+        const insertRowIndex = detailStartRow + reservedDetailRows;
+        const cloneRowIndex = insertRowIndex - 1;
+        await insertRowsInSheet(zip, insertRowIndex, detailInsertCount, cloneRowIndex);
+        await shiftDrawings(zip, insertRowIndex, detailInsertCount);
+        currentTotalsBaseRow += detailInsertCount;
       }
 
-      // Fill in Totals Values
-      (allCurrencies.length > 0 ? allCurrencies : ['TWD']).forEach((curr, currIndex) => {
-        const r = totalsDataRow + currIndex;
-        const currName = getCurrencyName(curr);
+      // B. Insert Totals Currencies
+      if (totalsInsertCount > 0) {
+        const dataRowIndex = currentTotalsBaseRow + 1;
+        const insertPoint = dataRowIndex + 1;
+        await insertRowsInSheet(zip, insertPoint, totalsInsertCount, dataRowIndex);
+        await shiftDrawings(zip, insertPoint, totalsInsertCount);
+      }
 
-        // Expense (F/H)
-        if (expenseTotals[curr] !== undefined) {
-          ws.getCell(`F${r}`).value = currName;
-          ws.getCell(`H${r}`).value = expenseTotals[curr];
-        } else {
-          ws.getCell(`F${r}`).value = '';
-          ws.getCell(`H${r}`).value = '';
-        }
+      // 3. Reload structurally stable zip into XlsxPopulate
+      const modifiedBuffer = await zip.generateAsync({ type: 'arraybuffer' });
+      wb = await XlsxPopulate.fromDataAsync(modifiedBuffer);
+      ws = wb.sheet(0);
 
-        // Prepaid (P/R)
-        if (prepaidTotals[curr] !== undefined) {
-          ws.getCell(`P${r}`).value = currName;
-          ws.getCell(`R${r}`).value = prepaidTotals[curr];
-        } else {
-          ws.getCell(`P${r}`).value = '';
-          ws.getCell(`R${r}`).value = '';
-        }
+      // 4. Populate values
+      const currencyMap = {
+        'TWD': '台幣', 'USD': '美金', 'JPY': '日幣', 'EUR': '歐元', 'CNY': '人民幣', 'HKD': '港幣', 'GBP': '英鎊'
+      };
+      const getCurrencyName = (c) => currencyMap[c] || c;
 
-        // Net Payable/Return (Z/AB)
-        ws.getCell(`Z${r}`).value = currName;
-        ws.getCell(`AB${r}`).value = netTotals[curr];
+      ws.cell('C1').value(report.employeeName);
+      ws.cell('G1').value(report.employeeId);
+      ws.cell('K1').value(report.unit);
+      ws.cell('R1').value(report.department);
+      ws.cell('Y1').value(`${report.startDate} ~ ${report.endDate}`);
+
+      report.items.forEach((item, index) => {
+        const r = detailStartRow + index;
+        ws.cell(`A${r}`).value(item.date);
+        ws.cell(`C${r}`).value(item.location);
+        ws.cell(`G${r}`).value(item.description.trim() || item.category);
+        ws.cell(`M${r}`).value(getCurrencyName(item.currency));
+        ws.cell(`O${r}`).value(item.category === '交通費' ? item.amount : '');
+        ws.cell(`Q${r}`).value(item.category === '住宿費' ? item.amount : '');
+        ws.cell(`S${r}`).value(item.category === '膳雜費' ? item.amount : '');
+        ws.cell(`U${r}`).value(item.category === '交際費' ? item.amount : '');
+        ws.cell(`W${r}`).value(item.category === '其他費用' ? item.amount : '');
+        ws.cell(`Y${r}`).value(item.projectCode);
+        ws.cell(`AB${r}`).value(item.category === '交通費' ? item.transportMode : '');
+
+        const descLen = String(item.description.trim() || item.category).length;
+        const locLen = String(item.location).length;
+        const lineCount = Math.max(1, Math.ceil(Math.max(descLen, locLen) / 15));
+        
+        ws.row(r).height(Math.max(20, lineCount * 18));
+        ws.cell(`G${r}`).style('wrapText', true).style('verticalAlignment', 'top');
+        ws.cell(`C${r}`).style('wrapText', true).style('verticalAlignment', 'top');
       });
 
-      // -- 【E. 列印與版面規則】 --
-      // Ensure A4 landscape/portrait is strictly enforced, and pagination flows automatically
-      if (ws.pageSetup) {
-        ws.pageSetup.paperSize = 9; // A4
-        ws.pageSetup.fitToPage = true;
-        ws.pageSetup.fitToWidth = 1;
-        // Allows infinite vertical expansion into subsequent pages, without compressing to single page
-        ws.pageSetup.fitToHeight = 0; 
-        ws.pageSetup.printArea = undefined; // Do not cut off dynamically inserted rows
+      // Clear unused template reserved rows
+      if (numItems < reservedDetailRows) {
+        for (let i = numItems; i < reservedDetailRows; i++) {
+           const r = detailStartRow + i;
+           ['A','C','G','M','O','Q','S','U','W','Y','AB'].forEach(col => ws.cell(`${col}${r}`).value(''));
+        }
       }
 
-      const newBuffer = await workbook.xlsx.writeBuffer();
+      // Totals
+      const totalsDataRow = currentTotalsBaseRow + 1;
+      const currsToRender = allCurrencies.length > 0 ? allCurrencies : ['TWD'];
+      
+      currsToRender.forEach((curr, i) => {
+           const r = totalsDataRow + i;
+           const currName = getCurrencyName(curr);
 
-      // ====== 補回 ExcelJS 會丟失的固定元素 (Logo, Header/Footer, 設定) ======
-      // 讀取原始的 template buffer
-      const originZip = await JSZip.loadAsync(arrayBuffer.slice(0));
-      // 讀取 ExcelJS 產生出來的 modified buffer
-      const newZip = await JSZip.loadAsync(newBuffer);
+           if (expenseTotals[curr] !== undefined) {
+               ws.cell(`F${r}`).value(currName);
+               ws.cell(`H${r}`).value(expenseTotals[curr]);
+           } else {
+               ws.cell(`F${r}`).value('');
+               ws.cell(`H${r}`).value('');
+           }
 
-      // 取出工作表的 XML
-      const originSheetFile = originZip.file('xl/worksheets/sheet1.xml');
-      const newSheetFile = newZip.file('xl/worksheets/sheet1.xml');
+           if (prepaidTotals[curr] !== undefined) {
+               ws.cell(`P${r}`).value(currName);
+               ws.cell(`R${r}`).value(prepaidTotals[curr]);
+           } else {
+               ws.cell(`P${r}`).value('');
+               ws.cell(`R${r}`).value('');
+           }
 
-      if (originSheetFile && newSheetFile) {
-        let newSheetXml = await newSheetFile.async('string');
-        const originSheetXml = await originSheetFile.async('string');
+           ws.cell(`Z${r}`).value(currName);
+           ws.cell(`AB${r}`).value((expenseTotals[curr] || 0) - (prepaidTotals[curr] || 0));
+      });
 
-        // 從原始範本中擷取可能被 ExcelJS 丟失的區塊
-        const pageSetupMatch = originSheetXml.match(/<pageSetup[^>]*\/>/);
-        const printOptionsMatch = originSheetXml.match(/<printOptions[^>]*\/>/);
-        const headerFooterMatch = originSheetXml.match(/<headerFooter[\s\S]*?<\/headerFooter>/);
-        const drawingMatch = originSheetXml.match(/<drawing[^>]*\/>/);
-        const legacyDrawingMatch = originSheetXml.match(/<legacyDrawing[^>]*\/>/);
-        const pictureMatch = originSheetXml.match(/<picture[^>]*\/>/);
-        const pageMarginsMatch = originSheetXml.match(/<pageMargins[^>]*\/>/);
-
-        // 將 ExcelJS 產出的新 XML 中的對應區塊清除 (避免順序錯誤或重複)
-        newSheetXml = newSheetXml.replace(/<pageSetup[^>]*\/>/, '');
-        newSheetXml = newSheetXml.replace(/<printOptions[^>]*\/>/, '');
-        newSheetXml = newSheetXml.replace(/<headerFooter[\s\S]*?<\/headerFooter>/, '');
-        newSheetXml = newSheetXml.replace(/<drawing[^>]*\/>/, '');
-        newSheetXml = newSheetXml.replace(/<legacyDrawing[^>]*\/>/, '');
-        newSheetXml = newSheetXml.replace(/<picture[^>]*\/>/, '');
-        newSheetXml = newSheetXml.replace(/<pageMargins[^>]*\/>/, '');
-
-        // 將原始完好的區塊依照嚴格 XML 排序重新注入到表尾
-        const injectBlocks = [
-          printOptionsMatch?.[0], 
-          pageMarginsMatch?.[0], 
-          pageSetupMatch?.[0], 
-          headerFooterMatch?.[0], 
-          drawingMatch?.[0], 
-          legacyDrawingMatch?.[0], 
-          pictureMatch?.[0]
-        ].filter(Boolean).join('');
-
-        newSheetXml = newSheetXml.replace('</worksheet>', `${injectBlocks}</worksheet>`);
-
-        // 把修改過的、完美融合的 XML 存回原始的 ZIP 結構中
-        originZip.file('xl/worksheets/sheet1.xml', newSheetXml);
-        
-        // 因為 ExcelJS 會改變字串表與樣式索引，必須把這兩者也同步過來
-        const newStyles = await newZip.file('xl/styles.xml')?.async('uint8array');
-        if (newStyles) originZip.file('xl/styles.xml', newStyles);
-        
-        const newStrings = await newZip.file('xl/sharedStrings.xml')?.async('uint8array');
-        if (newStrings) originZip.file('xl/sharedStrings.xml', newStrings);
-
-        // 重新輸出不失真的 Excel
-        const finalBuffer = await originZip.generateAsync({ type: 'array' });
-        saveAs(new Blob([finalBuffer]), `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
-      } else {
-        // Fallback: 如果壓縮檔結構異常，直接使用 excelJS 的版本
-        saveAs(new Blob([newBuffer]), `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
-      }
+      const finalBuffer = await wb.outputAsync();
+      saveAs(new Blob([finalBuffer]), `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
 
     } catch (e) {
       console.error(e);

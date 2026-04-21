@@ -78,7 +78,7 @@ interface ExpenseReport {
 
 const CATEGORIES: ExpenseCategory[] = ['交通費', '住宿費', '膳雜費', '交際費', '其他費用'];
 const TRANSPORT_MODES: TransportMode[] = ['飛機', '高鐵', '火車', '捷運', '計程車', '租車', '其他'];
-const CURRENCIES = ['TWD', 'USD', 'EUR', 'JPY', 'CNY', 'HKD'];
+const CURRENCIES = ['TWD', 'USD', 'EUR', 'JPY', 'CNY', 'HKD', 'GBP'];
 
 // --- Components ---
 
@@ -279,7 +279,9 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       if (item.category === '交際費') row[20] = item.amount;
       if (item.category === '其他費用') row[22] = item.amount;
       row[24] = item.projectCode;
-      if (index === 0) row[27] = item.transportMode;
+      if (item.category === '交通費') {
+        row[27] = item.transportMode;
+      }
       data.push(row);
     });
 

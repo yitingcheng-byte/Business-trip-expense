@@ -221,165 +221,206 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       }
 
       const currencyMap: Record<string, string> = {
-        'TWD': '台幣',
-        'USD': '美金',
-        'JPY': '日幣',
-        'EUR': '歐元',
-        'CNY': '人民幣',
-        'HKD': '港幣',
-        'GBP': '英鎊',
+        'TWD': '台幣', 'USD': '美金', 'JPY': '日幣', 'EUR': '歐元', 'CNY': '人民幣', 'HKD': '港幣', 'GBP': '英鎊'
       };
       const getCurrencyName = (c: string) => currencyMap[c] || c;
 
-      // 1. Fill base data (Row 13, per original layout logic mapping)
-      ws.getCell('C13').value = report.employeeName;
-      ws.getCell('G13').value = report.employeeId;
-      ws.getCell('K13').value = report.unit;
-      ws.getCell('R13').value = report.department;
-      ws.getCell('Y13').value = `${report.startDate} ~ ${report.endDate}`;
+      // Helper: Clone Row Style & Merges explicitly by row number
+      const cloneRowStyleAndMerges = (sourceRowNum: number, targetRowNum: number) => {
+        const sourceRow = ws.getRow(sourceRowNum);
+        const targetRow = ws.getRow(targetRowNum);
 
-      // 2. Data Rows (Start at Row 16 based on layout where 14-15 are table headers)
-      const dataStartRow = 16;
-      const numItems = report.items.length;
-
-      // Pre-calculate merged arrays for items
-      const itemMerges = [
-        ['A', 'B'], ['C', 'F'], ['G', 'L'], ['M', 'N'],
-        ['O', 'P'], ['Q', 'R'], ['S', 'T'], ['U', 'V'],
-        ['W', 'X'], ['Y', 'AA'], ['AB', 'AD']
-      ];
-
-      if (numItems > 1) {
-        // Insert empty rows for the extra items, pushing footer down
-        ws.spliceRows(dataStartRow + 1, 0, ...Array(numItems - 1).fill([]));
-      }
-
-      report.items.forEach((item, index) => {
-        const r = dataStartRow + index;
-        const row = ws.getRow(r);
-
-        // If it's a duplicated row, copy styles
-        if (index > 0) {
-          for (let c = 1; c <= 30; c++) {
-            row.getCell(c).style = ws.getCell(dataStartRow, c).style;
-          }
-        }
-
-        // Apply column merges
-        itemMerges.forEach(([startCol, endCol]) => {
-          try { ws.mergeCells(`${startCol}${r}:${endCol}${r}`); } catch {}
+        // Copy styles
+        sourceRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          const targetCell = targetRow.getCell(colNumber);
+          targetCell.style = cell.style; // Clone style reference (copy)
+          targetCell.value = null; // Clear placeholder text
         });
 
-        // Populate values
-        row.getCell('A').value = item.date;
-        row.getCell('C').value = item.location;
-        row.getCell('G').value = item.description.trim() || item.category;
-        row.getCell('M').value = getCurrencyName(item.currency);
-        
-        row.getCell('O').value = item.category === '交通費' ? item.amount : '';
-        row.getCell('Q').value = item.category === '住宿費' ? item.amount : '';
-        row.getCell('S').value = item.category === '膳雜費' ? item.amount : '';
-        row.getCell('U').value = item.category === '交際費' ? item.amount : '';
-        row.getCell('W').value = item.category === '其他費用' ? item.amount : '';
-        
-        row.getCell('Y').value = item.projectCode;
-        row.getCell('AB').value = item.category === '交通費' ? item.transportMode : '';
+        // Copy row height
+        targetRow.height = sourceRow.height;
 
-        // Dynamic Row Height Calculation
-        const descCell = row.getCell('G');
-        const descLength = String(descCell.value).length;
-        // Estimate ~15 full width chars per line. Base row height ~20.
-        const lineCount = Math.max(1, Math.ceil(descLength / 15));
-        row.height = Math.max(20, Math.ceil(lineCount * 18));
+        // Copy row-specific merges
+        const sourceMerges: { left: number, right: number }[] = [];
+        Object.values(ws._merges).forEach((merge: any) => {
+          if (merge.top === sourceRowNum && merge.bottom === sourceRowNum) {
+             sourceMerges.push({ left: merge.left, right: merge.right });
+          }
+        });
+
+        sourceMerges.forEach(m => {
+          try {
+            ws.mergeCells(targetRowNum, m.left, targetRowNum, m.right);
+          } catch (e) {
+            // Ignore if already merged
+          }
+        });
+      };
+
+      // -- 【A. 表頭區 Mapping】 --
+      ws.getCell('C1').value = report.employeeName;
+      ws.getCell('G1').value = report.employeeId;
+      ws.getCell('K1').value = report.unit;
+      ws.getCell('R1').value = report.department;
+      ws.getCell('Y1').value = `${report.startDate} ~ ${report.endDate}`;
+
+      // -- 【B. 明細區 Mapping & 自動插列】 --
+      const detailStartRow = 5;
+      const reservedDetailRows = 6; // Template defines rows 5 ~ 10
+      const numItems = report.items.length;
+      let insertedDetailRows = 0;
+
+      if (numItems > reservedDetailRows) {
+        insertedDetailRows = numItems - reservedDetailRows;
+        // Insert new rows at row 11 (pushing totals and footer down)
+        ws.spliceRows(11, 0, ...Array(insertedDetailRows).fill([]));
+
+        // Format inserted blank rows by duplicating the last reserved template row (Row 10)
+        for (let i = 0; i < insertedDetailRows; i++) {
+          cloneRowStyleAndMerges(10, 11 + i);
+        }
+      }
+
+      // Write detail data row by row
+      report.items.forEach((item, index) => {
+        const r = detailStartRow + index;
+        const row = ws.getRow(r);
+
+        ws.getCell(`A${r}`).value = item.date;
+        ws.getCell(`C${r}`).value = item.location;
+        ws.getCell(`G${r}`).value = item.description.trim() || item.category;
+        ws.getCell(`M${r}`).value = getCurrencyName(item.currency);
         
-        // Enforce wrap text just in case template cell missed it
+        ws.getCell(`O${r}`).value = item.category === '交通費' ? item.amount : '';
+        ws.getCell(`Q${r}`).value = item.category === '住宿費' ? item.amount : '';
+        ws.getCell(`S${r}`).value = item.category === '膳雜費' ? item.amount : '';
+        ws.getCell(`U${r}`).value = item.category === '交際費' ? item.amount : '';
+        ws.getCell(`W${r}`).value = item.category === '其他費用' ? item.amount : '';
+        
+        ws.getCell(`Y${r}`).value = item.projectCode;
+        ws.getCell(`AB${r}`).value = item.category === '交通費' ? item.transportMode : '';
+
+        // Text wrap and dynamic height
+        const descCell = ws.getCell(`G${r}`);
+        const locCell = ws.getCell(`C${r}`);
+
+        // Ensure text wrap is on
         if (!descCell.alignment) descCell.alignment = {};
         descCell.alignment = { ...descCell.alignment, wrapText: true, vertical: 'top' };
         
-        const locCell = row.getCell('C');
         if (!locCell.alignment) locCell.alignment = {};
         locCell.alignment = { ...locCell.alignment, wrapText: true, vertical: 'top' };
+
+        // Auto height calculation
+        const descLen = String(descCell.value).length;
+        const locLen = String(locCell.value).length;
+        const maxLen = Math.max(descLen, locLen);
+        const lineCount = Math.max(1, Math.ceil(maxLen / 15)); // Estimate 15 full width chars
+        row.height = Math.max(20, Math.ceil(lineCount * 18));
       });
 
-      // 3. Totals Area
-      // The spacer originally at row 17, footer header at 18, so dynamic footer data row is at 19 internally (if 1 item).
-      const footerDataRow = 18 + numItems; 
+      // Clear any unused pre-reserved rows (so they stay blank, keeping layout)
+      if (numItems < reservedDetailRows) {
+        for (let i = numItems; i < reservedDetailRows; i++) {
+          const r = detailStartRow + i;
+          ws.getCell(`A${r}`).value = '';
+          ws.getCell(`C${r}`).value = '';
+          ws.getCell(`G${r}`).value = '';
+          ws.getCell(`M${r}`).value = '';
+          ws.getCell(`O${r}`).value = '';
+          ws.getCell(`Q${r}`).value = '';
+          ws.getCell(`S${r}`).value = '';
+          ws.getCell(`U${r}`).value = '';
+          ws.getCell(`W${r}`).value = '';
+          ws.getCell(`Y${r}`).value = '';
+          ws.getCell(`AB${r}`).value = '';
+        }
+      }
+
+      // -- 【C. 合計區 Mapping & 自動插列】 --
+      // Totals were originally at row 11 (title F11/K11/U11) and 12 (data F12/H12, P12/R12, Z12/AB12)
+      // If we inserted details rows at row 11, the totals block got pushed down
+      const totalsTitleRow = 11 + insertedDetailRows;
+      const totalsDataRow = totalsTitleRow + 1; // originally row 12
 
       const expenseTotals: Record<string, number> = {};
+      const prepaidTotals: Record<string, number> = {};
+      const netTotals: Record<string, number> = {};
+
       report.items.forEach(item => {
         expenseTotals[item.currency] = (expenseTotals[item.currency] || 0) + item.amount;
       });
-
-      const prepaidTotals: Record<string, number> = {};
       (report.prepaidItems || []).forEach(p => {
         prepaidTotals[p.currency] = (prepaidTotals[p.currency] || 0) + p.amount;
       });
 
+      // Find unique currencies
       const allCurrencies = Array.from(new Set([
         ...Object.keys(expenseTotals),
         ...Object.keys(prepaidTotals)
       ]));
 
-      const numCurrencies = Math.max(1, allCurrencies.length);
-
-      if (numCurrencies > 1) {
-        ws.spliceRows(footerDataRow + 1, 0, ...Array(numCurrencies - 1).fill([]));
-      }
-
-      const footerMerges = [
-        ['A', 'E'], ['F', 'G'], ['H', 'J'],
-        ['K', 'O'], ['P', 'Q'], ['R', 'T'],
-        ['U', 'Y'], ['Z', 'AA'], ['AB', 'AD']
-      ];
-
-      (allCurrencies.length > 0 ? allCurrencies : ['TWD']).forEach((curr, i) => {
-        const r = footerDataRow + i;
-        const row = ws.getRow(r);
-
-        if (i > 0) {
-          for (let c = 1; c <= 30; c++) {
-            row.getCell(c).style = ws.getCell(footerDataRow, c).style;
-          }
-        }
-
-        footerMerges.forEach(([startCol, endCol]) => {
-          try { ws.mergeCells(`${startCol}${r}:${endCol}${r}`); } catch {}
-        });
-
-        const exp = expenseTotals[curr] || 0;
-        const pre = prepaidTotals[curr] || 0;
-        const diff = exp - pre;
-
-        if (expenseTotals[curr] !== undefined) {
-          row.getCell('F').value = getCurrencyName(curr);
-          row.getCell('H').value = exp;
-        } else {
-          row.getCell('F').value = '';
-          row.getCell('H').value = '';
-        }
-
-        if (prepaidTotals[curr] !== undefined) {
-          row.getCell('P').value = getCurrencyName(curr);
-          row.getCell('R').value = pre;
-        } else {
-          row.getCell('P').value = '';
-          row.getCell('R').value = '';
-        }
-
-        row.getCell('Z').value = getCurrencyName(curr);
-        row.getCell('AB').value = diff;
+      // Calculate net difference
+      allCurrencies.forEach(curr => {
+        netTotals[curr] = (expenseTotals[curr] || 0) - (prepaidTotals[curr] || 0);
       });
 
-      // 4. Print & Page Setup overrides (Ensuring A4 formatting)
+      // If more than 1 currency, we need to insert rows in the totals block
+      const numCurrencies = Math.max(1, allCurrencies.length);
+      let insertedTotalsRows = 0;
+
+      if (numCurrencies > 1) {
+        insertedTotalsRows = numCurrencies - 1;
+        const insertTotalsAtRow = totalsDataRow + 1;
+        
+        // Push rows below the totals data row down further
+        ws.spliceRows(insertTotalsAtRow, 0, ...Array(insertedTotalsRows).fill([]));
+
+        // Format these new inserted rows by cloning the first totals data row
+        for (let i = 0; i < insertedTotalsRows; i++) {
+          cloneRowStyleAndMerges(totalsDataRow, insertTotalsAtRow + i);
+        }
+      }
+
+      // Fill in Totals Values
+      (allCurrencies.length > 0 ? allCurrencies : ['TWD']).forEach((curr, currIndex) => {
+        const r = totalsDataRow + currIndex;
+        const currName = getCurrencyName(curr);
+
+        // Expense (F/H)
+        if (expenseTotals[curr] !== undefined) {
+          ws.getCell(`F${r}`).value = currName;
+          ws.getCell(`H${r}`).value = expenseTotals[curr];
+        } else {
+          ws.getCell(`F${r}`).value = '';
+          ws.getCell(`H${r}`).value = '';
+        }
+
+        // Prepaid (P/R)
+        if (prepaidTotals[curr] !== undefined) {
+          ws.getCell(`P${r}`).value = currName;
+          ws.getCell(`R${r}`).value = prepaidTotals[curr];
+        } else {
+          ws.getCell(`P${r}`).value = '';
+          ws.getCell(`R${r}`).value = '';
+        }
+
+        // Net Payable/Return (Z/AB)
+        ws.getCell(`Z${r}`).value = currName;
+        ws.getCell(`AB${r}`).value = netTotals[curr];
+      });
+
+      // -- 【E. 列印與版面規則】 --
+      // Ensure A4 landscape/portrait is strictly enforced, and pagination flows automatically
       if (ws.pageSetup) {
         ws.pageSetup.paperSize = 9; // A4
         ws.pageSetup.fitToPage = true;
         ws.pageSetup.fitToWidth = 1;
-        ws.pageSetup.fitToHeight = 0; // Allows growing downward across multiple pages
-        ws.pageSetup.printArea = undefined; // Clear any hardcoded print areas that might cut off extra rows
+        // Allows infinite vertical expansion into subsequent pages, without compressing to single page
+        ws.pageSetup.fitToHeight = 0; 
+        ws.pageSetup.printArea = undefined; // Do not cut off dynamically inserted rows
       }
 
-      // Generate the export buffer and trigger download
       const buffer = await workbook.xlsx.writeBuffer();
       saveAs(new Blob([buffer]), `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
 

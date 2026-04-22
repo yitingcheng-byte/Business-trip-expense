@@ -232,37 +232,55 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       const numCurrencies = Math.max(1, allCurrencies.length);
       const totalsInsertCount = Math.max(0, numCurrencies - 1);
 
-      // 2. JSZip safe shift
+      // 2. JSZip safe shift and merge rebuild
       const zip = await JSZip.loadAsync(arrayBuffer);
       zip.remove('xl/calcChain.xml');
 
-      const insertRowsInSheet = async (targetZip: JSZip, insertAt: number, shiftCount: number, cloneRow: number) => {
+      const sheetPath = 'xl/worksheets/sheet1.xml';
+      const file = zip.file(sheetPath);
+      if (!file) throw new Error("Template misses sheet1.xml");
+      const xmlStr = await file.async('string');
+      const doc = new DOMParser().parseFromString(xmlStr, 'application/xml');
+      const sheetData = doc.getElementsByTagName('sheetData')[0];
+      const worksheetNode = sheetData.parentNode as Element | null;
+      if (!worksheetNode) throw new Error("Invalid worksheet XML");
+
+      // Setup MergeCells Array
+      const mergeCellsNode = doc.getElementsByTagName('mergeCells')[0];
+      type MergeRange = { startCol: string, startRow: number, endCol: string, endRow: number };
+      let merges: MergeRange[] = [];
+      if (mergeCellsNode) {
+        Array.from(mergeCellsNode.getElementsByTagName('mergeCell')).forEach(m => {
+          const ref = m.getAttribute('ref');
+          if (!ref) return;
+          const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+          if (!match) return;
+          merges.push({
+            startCol: match[1], startRow: parseInt(match[2], 10),
+            endCol: match[3], endRow: parseInt(match[4], 10)
+          });
+        });
+      }
+
+      // Snapshot totals merge rules from the original untouched template (Anchor-based)
+      const totalsTitleMergesTpl = merges.filter(m => m.startRow === totalsBaseRow && m.endRow === totalsBaseRow).map(m => ({...m}));
+      const totalsDataMergesTpl = merges.filter(m => m.startRow === totalsBaseRow + 1 && m.endRow === totalsBaseRow + 1).map(m => ({...m}));
+
+      const shiftAndCloneRows = (insertAt: number, shiftCount: number, cloneRow: number) => {
         if (shiftCount <= 0) return;
-        const sheetPath = 'xl/worksheets/sheet1.xml';
-        const file = targetZip.file(sheetPath);
-        if (!file) return;
-        const xmlStr = await file.async('string');
-
-        const doc = new DOMParser().parseFromString(xmlStr, 'application/xml');
-        const sheetData = doc.getElementsByTagName('sheetData')[0];
-        if (!sheetData) return;
-
         const rows = Array.from(sheetData.getElementsByTagName('row'));
 
-        // Shift rows down
         rows.forEach(row => {
           const rAttr = parseInt(row.getAttribute('r') || '0', 10);
           if (rAttr >= insertAt) {
             row.setAttribute('r', String(rAttr + shiftCount));
-            const cells = Array.from(row.getElementsByTagName('c'));
-            cells.forEach(c => {
+            Array.from(row.getElementsByTagName('c')).forEach(c => {
               const ref = c.getAttribute('r');
               if (ref) c.setAttribute('r', ref.replace(/([A-Z]+)(\d+)/, (_, col, rowNum) => `${col}${parseInt(rowNum) + shiftCount}`));
             });
           }
         });
 
-        // Clone
         let templateRowNode = rows.find(r => parseInt(r.getAttribute('r') || '0', 10) === cloneRow);
         if (templateRowNode) {
            for (let i = 0; i < shiftCount; i++) {
@@ -270,11 +288,10 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
              const newRowNum = insertAt + i;
              newRow.setAttribute('r', String(newRowNum));
 
-             const cells = Array.from(newRow.getElementsByTagName('c'));
-             cells.forEach((c: any) => {
+             Array.from(newRow.getElementsByTagName('c')).forEach((c: any) => {
                const ref = c.getAttribute('r');
                if (ref) c.setAttribute('r', ref.replace(/([A-Z]+)(\d+)/, (_, col) => `${col}${newRowNum}`));
-               c.removeAttribute('t'); 
+               c.removeAttribute('t');
                Array.from(c.getElementsByTagName('v')).forEach((n: any) => n.remove());
                Array.from(c.getElementsByTagName('is')).forEach((n: any) => n.remove());
                Array.from(c.getElementsByTagName('f')).forEach((n: any) => n.remove());
@@ -287,42 +304,25 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
            }
         }
 
-        // Shift Merge Cells
-        const mergeCellsNode = doc.getElementsByTagName('mergeCells')[0];
-        if (mergeCellsNode) {
-          const merges = Array.from(mergeCellsNode.getElementsByTagName('mergeCell'));
-          const newMerges: string[] = [];
-
-          merges.forEach(m => {
-            const ref = m.getAttribute('ref');
-            if (!ref) return;
-            const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
-            if (!match) return;
-            
-            let [, startCol, startRowStr, endCol, endRowStr] = match;
-            let startRow = parseInt(startRowStr, 10);
-            let endRow = parseInt(endRowStr, 10);
-
-            if (startRow >= insertAt) {
-              m.setAttribute('ref', `${startCol}${startRow + shiftCount}:${endCol}${endRow + shiftCount}`);
-            } else if (startRow < insertAt && endRow >= insertAt) {
-              m.setAttribute('ref', `${startCol}${startRow}:${endCol}${endRow + shiftCount}`);
-            } else if (startRow === cloneRow && endRow === cloneRow) {
-              for (let i = 0; i < shiftCount; i++) {
-                newMerges.push(`${startCol}${insertAt + i}:${endCol}${insertAt + i}`);
-              }
+        const newMerges: MergeRange[] = [];
+        merges.forEach(m => {
+            if (m.startRow >= insertAt) {
+                newMerges.push({ ...m, startRow: m.startRow + shiftCount, endRow: m.endRow + shiftCount });
+            } else if (m.startRow < insertAt && m.endRow >= insertAt) {
+                newMerges.push({ ...m, endRow: m.endRow + shiftCount });
+            } else {
+                newMerges.push({ ...m });
             }
-          });
 
-          newMerges.forEach(ref => {
-            const mNode = doc.createElement('mergeCell');
-            mNode.setAttribute('ref', ref);
-            mergeCellsNode.appendChild(mNode);
-          });
-          mergeCellsNode.setAttribute('count', String(mergeCellsNode.children.length));
-        }
+            // Copy template row's single-row horizontal merges to new rows explicitly
+            if (m.startRow === cloneRow && m.endRow === cloneRow) {
+                for (let i = 0; i < shiftCount; i++) {
+                    newMerges.push({ ...m, startRow: insertAt + i, endRow: insertAt + i });
+                }
+            }
+        });
+        merges = newMerges;
 
-        // Update dimension if exists
         const dimensionNode = doc.getElementsByTagName('dimension')[0];
         if (dimensionNode) {
            const ref = dimensionNode.getAttribute('ref');
@@ -334,45 +334,6 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               }
            }
         }
-
-        // Patch Print / PageSetup for A4 size explicitly
-        const worksheetNode = sheetData.parentNode as Element | null;
-        if (!worksheetNode) return;
-        
-        let pageSetup = doc.getElementsByTagName('pageSetup')[0];
-        if (!pageSetup) {
-           pageSetup = doc.createElement('pageSetup');
-           worksheetNode.appendChild(pageSetup);
-        }
-        pageSetup.setAttribute('paperSize', '9');
-        pageSetup.setAttribute('fitToWidth', '1');
-        pageSetup.setAttribute('fitToHeight', '0');
-        pageSetup.setAttribute('orientation', 'portrait');
-
-        let sheetPr = doc.getElementsByTagName('sheetPr')[0];
-        if (!sheetPr) {
-            sheetPr = doc.createElement('sheetPr');
-            const pageSetUpPr = doc.createElement('pageSetUpPr');
-            pageSetUpPr.setAttribute('fitToPage', '1');
-            sheetPr.appendChild(pageSetUpPr);
-            
-            const firstWorksheetChild = worksheetNode.firstChild;
-            if (firstWorksheetChild) {
-              worksheetNode.insertBefore(sheetPr, firstWorksheetChild);
-            } else {
-              worksheetNode.appendChild(sheetPr);
-            }
-        } else {
-            let pageSetUpPr = sheetPr.getElementsByTagName('pageSetUpPr')[0];
-            if (!pageSetUpPr) {
-               pageSetUpPr = doc.createElement('pageSetUpPr');
-               sheetPr.appendChild(pageSetUpPr);
-            }
-            pageSetUpPr.setAttribute('fitToPage', '1');
-        }
-
-        const finalXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + new XMLSerializer().serializeToString(doc);
-        targetZip.file(sheetPath, finalXml);
       };
 
       const shiftDrawings = async (targetZip: JSZip, insertAt: number, shiftCount: number) => {
@@ -390,14 +351,14 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
          }
       };
 
+      // Shifting operations (Updates 'merges' implicitly)
       let currentTotalsBaseRow = totalsBaseRow;
       
       // A. Expand Details
       if (detailInsertCount > 0) {
         const insertRowIndex = detailStartRow + reservedDetailRows;
-        // The last available default row for details is row 10
         const cloneRowIndex = insertRowIndex - 1;
-        await insertRowsInSheet(zip, insertRowIndex, detailInsertCount, cloneRowIndex);
+        shiftAndCloneRows(insertRowIndex, detailInsertCount, cloneRowIndex);
         await shiftDrawings(zip, insertRowIndex, detailInsertCount);
         currentTotalsBaseRow += detailInsertCount;
       }
@@ -406,9 +367,78 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       if (totalsInsertCount > 0) {
         const dataRowIndex = currentTotalsBaseRow + 1; // row 12 is data row
         const insertPoint = dataRowIndex + 1;
-        await insertRowsInSheet(zip, insertPoint, totalsInsertCount, dataRowIndex);
+        shiftAndCloneRows(insertPoint, totalsInsertCount, dataRowIndex);
         await shiftDrawings(zip, insertPoint, totalsInsertCount);
       }
+
+      // --- Explicitly rebuild Totals Area Merges ---
+      const totalsEndRow = currentTotalsBaseRow + 1 + totalsInsertCount;
+      // 1. Remove all old merges in the totals region
+      merges = merges.filter(m => !(m.startRow >= currentTotalsBaseRow && m.endRow <= totalsEndRow));
+      // 2. Re-apply title merges
+      totalsTitleMergesTpl.forEach(t => {
+          merges.push({ ...t, startRow: currentTotalsBaseRow, endRow: currentTotalsBaseRow });
+      });
+      // 3. Re-apply data merges
+      for (let i = 0; i <= totalsInsertCount; i++) {
+          let r = currentTotalsBaseRow + 1 + i;
+          totalsDataMergesTpl.forEach(t => {
+              merges.push({ ...t, startRow: r, endRow: r });
+          });
+      }
+
+      // --- Write merges back to XML ---
+      if (mergeCellsNode) {
+          Array.from(mergeCellsNode.children).forEach(c => c.remove());
+          const uniqueMerges = new Map<string, MergeRange>();
+          merges.forEach(m => {
+             const ref = `${m.startCol}${m.startRow}:${m.endCol}${m.endRow}`;
+             uniqueMerges.set(ref, m);
+          });
+          uniqueMerges.forEach((m, ref) => {
+             const mNode = doc.createElement('mergeCell');
+             mNode.setAttribute('ref', ref);
+             mergeCellsNode.appendChild(mNode);
+          });
+          mergeCellsNode.setAttribute('count', String(uniqueMerges.size));
+      }
+
+      // --- Patch Print / PageSetup ---
+      let pageSetup = doc.getElementsByTagName('pageSetup')[0];
+      if (!pageSetup) {
+         pageSetup = doc.createElement('pageSetup');
+         worksheetNode.appendChild(pageSetup);
+      }
+      pageSetup.setAttribute('paperSize', '9');
+      pageSetup.setAttribute('fitToWidth', '1');
+      pageSetup.setAttribute('fitToHeight', '0');
+      pageSetup.setAttribute('orientation', 'portrait');
+
+      let sheetPr = doc.getElementsByTagName('sheetPr')[0];
+      if (!sheetPr) {
+          sheetPr = doc.createElement('sheetPr');
+          const pageSetUpPr = doc.createElement('pageSetUpPr');
+          pageSetUpPr.setAttribute('fitToPage', '1');
+          sheetPr.appendChild(pageSetUpPr);
+          
+          const firstWorksheetChild = worksheetNode.firstChild;
+          if (firstWorksheetChild) {
+            worksheetNode.insertBefore(sheetPr, firstWorksheetChild);
+          } else {
+            worksheetNode.appendChild(sheetPr);
+          }
+      } else {
+          let pageSetUpPr = sheetPr.getElementsByTagName('pageSetUpPr')[0];
+          if (!pageSetUpPr) {
+             pageSetUpPr = doc.createElement('pageSetUpPr');
+             sheetPr.appendChild(pageSetUpPr);
+          }
+          pageSetUpPr.setAttribute('fitToPage', '1');
+      }
+
+      // Serialize and update zip
+      const finalXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + new XMLSerializer().serializeToString(doc);
+      zip.file(sheetPath, finalXml);
 
       // 3. Fill values using XlsxPopulate
       const modifiedBuffer = await zip.generateAsync({ type: 'arraybuffer' });

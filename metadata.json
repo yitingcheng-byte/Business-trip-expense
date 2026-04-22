@@ -1,6 +1,6 @@
 {
-  "name": "出差費用報支系統v1",
-  "description": "提供出差費用記錄、提交與追蹤功能，支援明細填寫與 Excel 匯出。",
+  "name": "出差費用報支系統",
+  "description": "Business Trip Expense Tracker - a minimal, natural-toned internal dashboard for managing travel expenses.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

@@ -6,3 +6,4 @@ function shiftRowsInXlsxPopulate(ws, startRow, numRows) {
     // 2. Shift merged cells
     // ws._mergeCellsNode.children
 }
+

@@ -212,16 +212,31 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       
       const arrayBuffer = await response.arrayBuffer();
 
-      // 1. Calculations
+      // 1. Analyze structure first using XlsxPopulate memory buffer
+      let wb = await XlsxPopulate.fromDataAsync(arrayBuffer);
+      let ws = wb.sheet(0);
+      
+      // Find anchors dynamically
       const detailStartRow = 5;
       const reservedDetailRows = 6; 
-      const totalsBaseRow = 11;
       
+      let totalsBaseRow = 11; // default fallback
+      for (let r = 5; r <= 100; r++) {
+        const valA = String(ws.cell(`A${r}`).value() || '');
+        const valF = String(ws.cell(`F${r}`).value() || '');
+        const valK = String(ws.cell(`K${r}`).value() || '');
+        if (valA.includes('費用報支合計') || valF.includes('費用報支合計') || valK.includes('預支費用')) {
+          totalsBaseRow = r;
+          break;
+        }
+      }
+
+      // Calculate insertions
       const numItems = report.items.length;
       const detailInsertCount = Math.max(0, numItems - reservedDetailRows);
       
-      const expenseTotals: Record<string, number> = {};
-      const prepaidTotals: Record<string, number> = {};
+      const expenseTotals = {};
+      const prepaidTotals = {};
       report.items.forEach(item => {
         expenseTotals[item.currency] = (expenseTotals[item.currency] || 0) + item.amount;
       });
@@ -232,24 +247,24 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       const numCurrencies = Math.max(1, allCurrencies.length);
       const totalsInsertCount = Math.max(0, numCurrencies - 1);
 
-      // 2. JSZip safe shift
+      // 2. Perform safe shift natively on XML via JSZip to guarantee 100% preservation
       const zip = await JSZip.loadAsync(arrayBuffer);
-      zip.remove('xl/calcChain.xml');
 
-      const insertRowsInSheet = async (targetZip: JSZip, insertAt: number, shiftCount: number, cloneRow: number) => {
+      const insertRowsInSheet = async (targetZip, insertAt, shiftCount, cloneRow) => {
         if (shiftCount <= 0) return;
         const sheetPath = 'xl/worksheets/sheet1.xml';
         const file = targetZip.file(sheetPath);
         if (!file) return;
         const xmlStr = await file.async('string');
 
+        // Simple DOMParser in browser
         const doc = new DOMParser().parseFromString(xmlStr, 'application/xml');
         const sheetData = doc.getElementsByTagName('sheetData')[0];
         if (!sheetData) return;
 
         const rows = Array.from(sheetData.getElementsByTagName('row'));
 
-        // Shift rows down
+        // Shift down existing rows that are at or below insertAt
         rows.forEach(row => {
           const rAttr = parseInt(row.getAttribute('r') || '0', 10);
           if (rAttr >= insertAt) {
@@ -262,7 +277,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
           }
         });
 
-        // Clone
+        // Clone the template row
         let templateRowNode = rows.find(r => parseInt(r.getAttribute('r') || '0', 10) === cloneRow);
         if (templateRowNode) {
            for (let i = 0; i < shiftCount; i++) {
@@ -277,7 +292,6 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
                c.removeAttribute('t'); 
                Array.from(c.getElementsByTagName('v')).forEach((n: any) => n.remove());
                Array.from(c.getElementsByTagName('is')).forEach((n: any) => n.remove());
-               Array.from(c.getElementsByTagName('f')).forEach((n: any) => n.remove());
              });
 
              const allCurrentRows = Array.from(sheetData.getElementsByTagName('row'));
@@ -287,11 +301,11 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
            }
         }
 
-        // Shift Merge Cells
+        // Shift and Duplicate Merged Cells
         const mergeCellsNode = doc.getElementsByTagName('mergeCells')[0];
         if (mergeCellsNode) {
           const merges = Array.from(mergeCellsNode.getElementsByTagName('mergeCell'));
-          const newMerges: string[] = [];
+          const newMerges = [];
 
           merges.forEach(m => {
             const ref = m.getAttribute('ref');
@@ -305,11 +319,15 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
 
             if (startRow >= insertAt) {
               m.setAttribute('ref', `${startCol}${startRow + shiftCount}:${endCol}${endRow + shiftCount}`);
-            } else if (startRow < insertAt && endRow >= insertAt) {
-              m.setAttribute('ref', `${startCol}${startRow}:${endCol}${endRow + shiftCount}`);
-            } else if (startRow === cloneRow && endRow === cloneRow) {
-              for (let i = 0; i < shiftCount; i++) {
-                newMerges.push(`${startCol}${insertAt + i}:${endCol}${insertAt + i}`);
+            } else if (startRow <= cloneRow && endRow >= cloneRow) {
+              if (startRow === endRow) {
+                // Horizontal line merge -> duplicate for new rows
+                for (let i = 0; i < shiftCount; i++) {
+                  newMerges.push(`${startCol}${insertAt + i}:${endCol}${insertAt + i}`);
+                }
+              } else if (endRow >= insertAt) {
+                // Spans vertically past insertion point -> stretch it
+                m.setAttribute('ref', `${startCol}${startRow}:${endCol}${endRow + shiftCount}`);
               }
             }
           });
@@ -322,56 +340,18 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
           mergeCellsNode.setAttribute('count', String(mergeCellsNode.children.length));
         }
 
-        // Update dimension if exists
-        const dimensionNode = doc.getElementsByTagName('dimension')[0];
-        if (dimensionNode) {
-           const ref = dimensionNode.getAttribute('ref');
-           if (ref) {
-              const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
-              if (match) {
-                 const newEndRow = parseInt(match[4], 10) + shiftCount;
-                 dimensionNode.setAttribute('ref', `${match[1]}${match[2]}:${match[3]}${newEndRow}`);
-              }
-           }
-        }
-
-        // Patch Print / PageSetup for A4 size explicitly
-        let pageSetup = doc.getElementsByTagName('pageSetup')[0];
-        if (!pageSetup) {
-           pageSetup = doc.createElement('pageSetup');
-           sheetData.parentNode?.appendChild(pageSetup);
-        }
-        pageSetup.setAttribute('paperSize', '9');
-        pageSetup.setAttribute('fitToWidth', '1');
-        pageSetup.setAttribute('fitToHeight', '0');
-        pageSetup.setAttribute('orientation', 'portrait');
-
-        const docPr = doc.getElementsByTagName('sheetPr')[0];
-        if (!docPr) {
-            const newDocPr = doc.createElement('sheetPr');
-            const pageSetUpPr = doc.createElement('pageSetUpPr');
-            pageSetUpPr.setAttribute('fitToPage', '1');
-            newDocPr.appendChild(pageSetUpPr);
-            sheetData.parentNode?.insertBefore(newDocPr, doc.firstChild);
-        } else {
-            let pageSetUpPr = docPr.getElementsByTagName('pageSetUpPr')[0];
-            if (!pageSetUpPr) {
-               pageSetUpPr = doc.createElement('pageSetUpPr');
-               docPr.appendChild(pageSetUpPr);
-            }
-            pageSetUpPr.setAttribute('fitToPage', '1');
-        }
-
         const finalXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + new XMLSerializer().serializeToString(doc);
         targetZip.file(sheetPath, finalXml);
       };
 
-      const shiftDrawings = async (targetZip: JSZip, insertAt: number, shiftCount: number) => {
+      const shiftDrawings = async (targetZip, insertAt, shiftCount) => {
          if (shiftCount <= 0) return;
          const drawingFiles = Object.keys(targetZip.files).filter(k => k.startsWith('xl/drawings/drawing') && k.endsWith('.xml'));
          for (const file of drawingFiles) {
              let xmlStr = await targetZip.file(file)?.async('string');
              if (!xmlStr) continue;
+             
+             // Drawing rows are 0-indexed in XML. So row 11 is represented as 10.
              xmlStr = xmlStr.replace(/<xdr:row>(\d+)<\/xdr:row>/g, (match, rStr) => {
                  let r = parseInt(rStr, 10);
                  if (r >= (insertAt - 1)) r += shiftCount;
@@ -383,28 +363,33 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
 
       let currentTotalsBaseRow = totalsBaseRow;
       
-      // A. Expand Details
+      // A. Insert Details
       if (detailInsertCount > 0) {
         const insertRowIndex = detailStartRow + reservedDetailRows;
-        // The last available default row for details is row 10
         const cloneRowIndex = insertRowIndex - 1;
         await insertRowsInSheet(zip, insertRowIndex, detailInsertCount, cloneRowIndex);
         await shiftDrawings(zip, insertRowIndex, detailInsertCount);
         currentTotalsBaseRow += detailInsertCount;
       }
 
-      // B. Expand Totals
+      // B. Insert Totals Currencies
       if (totalsInsertCount > 0) {
-        const dataRowIndex = currentTotalsBaseRow + 1; // row 12 is data row
+        const dataRowIndex = currentTotalsBaseRow + 1;
         const insertPoint = dataRowIndex + 1;
         await insertRowsInSheet(zip, insertPoint, totalsInsertCount, dataRowIndex);
         await shiftDrawings(zip, insertPoint, totalsInsertCount);
       }
 
-      // 3. Fill values using XlsxPopulate
+      // 3. Reload structurally stable zip into XlsxPopulate
       const modifiedBuffer = await zip.generateAsync({ type: 'arraybuffer' });
-      const wb = await XlsxPopulate.fromDataAsync(modifiedBuffer);
-      const ws = wb.sheet(0);
+      wb = await XlsxPopulate.fromDataAsync(modifiedBuffer);
+      ws = wb.sheet(0);
+
+      // 4. Populate values
+      const currencyMap = {
+        'TWD': '台幣', 'USD': '美金', 'JPY': '日幣', 'EUR': '歐元', 'CNY': '人民幣', 'HKD': '港幣', 'GBP': '英鎊'
+      };
+      const getCurrencyName = (c) => currencyMap[c] || c;
 
       ws.cell('C1').value(report.employeeName);
       ws.cell('G1').value(report.employeeId);
@@ -417,7 +402,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         ws.cell(`A${r}`).value(item.date);
         ws.cell(`C${r}`).value(item.location);
         ws.cell(`G${r}`).value(item.description.trim() || item.category);
-        ws.cell(`M${r}`).value(item.currency); // User: 直接沿用文件匯出的值
+        ws.cell(`M${r}`).value(getCurrencyName(item.currency));
         ws.cell(`O${r}`).value(item.category === '交通費' ? item.amount : '');
         ws.cell(`Q${r}`).value(item.category === '住宿費' ? item.amount : '');
         ws.cell(`S${r}`).value(item.category === '膳雜費' ? item.amount : '');
@@ -426,21 +411,16 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         ws.cell(`Y${r}`).value(item.projectCode);
         ws.cell(`AB${r}`).value(item.category === '交通費' ? item.transportMode : '');
 
-        const descText = item.description.trim() || item.category;
-        const calcLines = (str: string) => {
-          if (!str) return 1;
-          return String(str).split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 15)), 0);
-        }
-        const descLines = calcLines(descText);
-        const locLines = calcLines(item.location);
-        const lineCount = Math.max(1, descLines, locLines);
+        const descLen = String(item.description.trim() || item.category).length;
+        const locLen = String(item.location).length;
+        const lineCount = Math.max(1, Math.ceil(Math.max(descLen, locLen) / 15));
         
-        ws.row(r).hidden(false);
-        ws.row(r).height(Math.max(24, lineCount * 18));
+        ws.row(r).height(Math.max(20, lineCount * 18));
         ws.cell(`G${r}`).style('wrapText', true).style('verticalAlignment', 'top');
         ws.cell(`C${r}`).style('wrapText', true).style('verticalAlignment', 'top');
       });
 
+      // Clear unused template reserved rows
       if (numItems < reservedDetailRows) {
         for (let i = numItems; i < reservedDetailRows; i++) {
            const r = detailStartRow + i;
@@ -448,15 +428,16 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         }
       }
 
-      // Generate Totals Data
-      const totalsDataRow = currentTotalsBaseRow + 1; // normally 12
+      // Totals
+      const totalsDataRow = currentTotalsBaseRow + 1;
       const currsToRender = allCurrencies.length > 0 ? allCurrencies : ['TWD'];
       
       currsToRender.forEach((curr, i) => {
            const r = totalsDataRow + i;
-           
+           const currName = getCurrencyName(curr);
+
            if (expenseTotals[curr] !== undefined) {
-               ws.cell(`F${r}`).value(curr);
+               ws.cell(`F${r}`).value(currName);
                ws.cell(`H${r}`).value(expenseTotals[curr]);
            } else {
                ws.cell(`F${r}`).value('');
@@ -464,14 +445,14 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
            }
 
            if (prepaidTotals[curr] !== undefined) {
-               ws.cell(`P${r}`).value(curr);
+               ws.cell(`P${r}`).value(currName);
                ws.cell(`R${r}`).value(prepaidTotals[curr]);
            } else {
                ws.cell(`P${r}`).value('');
                ws.cell(`R${r}`).value('');
            }
 
-           ws.cell(`Z${r}`).value(curr);
+           ws.cell(`Z${r}`).value(currName);
            ws.cell(`AB${r}`).value((expenseTotals[curr] || 0) - (prepaidTotals[curr] || 0));
       });
 
@@ -1259,3 +1240,4 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
     </motion.div>
   );
 }
+

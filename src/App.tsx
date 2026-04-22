@@ -336,28 +336,37 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         }
 
         // Patch Print / PageSetup for A4 size explicitly
+        const worksheetNode = sheetData.parentNode as Element | null;
+        if (!worksheetNode) return;
+        
         let pageSetup = doc.getElementsByTagName('pageSetup')[0];
         if (!pageSetup) {
            pageSetup = doc.createElement('pageSetup');
-           sheetData.parentNode?.appendChild(pageSetup);
+           worksheetNode.appendChild(pageSetup);
         }
         pageSetup.setAttribute('paperSize', '9');
         pageSetup.setAttribute('fitToWidth', '1');
         pageSetup.setAttribute('fitToHeight', '0');
         pageSetup.setAttribute('orientation', 'portrait');
 
-        const docPr = doc.getElementsByTagName('sheetPr')[0];
-        if (!docPr) {
-            const newDocPr = doc.createElement('sheetPr');
+        let sheetPr = doc.getElementsByTagName('sheetPr')[0];
+        if (!sheetPr) {
+            sheetPr = doc.createElement('sheetPr');
             const pageSetUpPr = doc.createElement('pageSetUpPr');
             pageSetUpPr.setAttribute('fitToPage', '1');
-            newDocPr.appendChild(pageSetUpPr);
-            sheetData.parentNode?.insertBefore(newDocPr, doc.firstChild);
+            sheetPr.appendChild(pageSetUpPr);
+            
+            const firstWorksheetChild = worksheetNode.firstChild;
+            if (firstWorksheetChild) {
+              worksheetNode.insertBefore(sheetPr, firstWorksheetChild);
+            } else {
+              worksheetNode.appendChild(sheetPr);
+            }
         } else {
-            let pageSetUpPr = docPr.getElementsByTagName('pageSetUpPr')[0];
+            let pageSetUpPr = sheetPr.getElementsByTagName('pageSetUpPr')[0];
             if (!pageSetUpPr) {
                pageSetUpPr = doc.createElement('pageSetUpPr');
-               docPr.appendChild(pageSetUpPr);
+               sheetPr.appendChild(pageSetUpPr);
             }
             pageSetUpPr.setAttribute('fitToPage', '1');
         }

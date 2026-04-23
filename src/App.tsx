@@ -573,31 +573,29 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       }
 
       // Generate Totals Data
-      const totalsDataRowStart = currentTotalsDataRow; // 14
-      const currsToRender = allCurrencies.length > 0 ? allCurrencies : ['TWD'];
+      const totalsDataRowStart = currentTotalsDataRow; // 12 (剛剛已改為 12)
       
-      currsToRender.forEach((curr, i) => {
-           const r = totalsDataRowStart + i;
-           const localCurr = getLocalCurr(curr);
-           
-           if (expenseTotals[curr] !== undefined) {
-               ws.cell(`F${r}`).value(localCurr);
-               ws.cell(`H${r}`).value(expenseTotals[curr]);
-           } else {
-               ws.cell(`F${r}`).value('');
-               ws.cell(`H${r}`).value('');
-           }
+      // 1. 處理「費用報支合計」(F、H 欄)
+      Object.entries(expenseTotals).forEach(([curr, amt], i) => {
+          const r = totalsDataRowStart + i;
+          ws.cell(`F${r}`).value(getLocalCurr(curr));
+          ws.cell(`H${r}`).value(amt);
+      });
 
-           if (prepaidTotals[curr] !== undefined) {
-               ws.cell(`P${r}`).value(localCurr);
-               ws.cell(`R${r}`).value(prepaidTotals[curr]);
-           } else {
-               ws.cell(`P${r}`).value('');
-               ws.cell(`R${r}`).value('');
-           }
+      // 2. 處理「已先預支費用」(P、R 欄)
+      Object.entries(prepaidTotals).forEach(([curr, amt], i) => {
+          const r = totalsDataRowStart + i;
+          ws.cell(`P${r}`).value(getLocalCurr(curr));
+          ws.cell(`R${r}`).value(amt);
+      });
 
-           ws.cell(`Z${r}`).value(localCurr);
-           ws.cell(`AB${r}`).value((expenseTotals[curr] || 0) - (prepaidTotals[curr] || 0));
+      // 3. 處理「應付員工或員工繳回」(Z、AB 欄)
+      const summaryCurrs = allCurrencies.length > 0 ? allCurrencies : ['TWD'];
+      summaryCurrs.forEach((curr, i) => {
+          const r = totalsDataRowStart + i;
+          const diff = (expenseTotals[curr] || 0) - (prepaidTotals[curr] || 0);
+          ws.cell(`Z${r}`).value(getLocalCurr(curr));
+          ws.cell(`AB${r}`).value(diff);
       });
 
       const finalBuffer = await wb.outputAsync();

@@ -540,7 +540,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       }
 
       // Generate Totals Data
-      const totalsDataRow = currentTotalsBaseRow + 1; // normally 12
+      const totalsDataRow = currentTotalsBaseRowAfterDetail + 1; // normally 12
       const currsToRender = allCurrencies.length > 0 ? allCurrencies : ['TWD'];
       
       currsToRender.forEach((curr, i) => {

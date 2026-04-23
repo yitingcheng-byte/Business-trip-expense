@@ -431,8 +431,8 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
           // 任務 A: 負責新增明細列固定 merge
           // 當明細 > 6 筆，將固定座標 merge 新增到每一个被插人的列
           const detailFixedSpans = [
-              ['A','B'], ['C','E'], ['F','J'], ['K','L'], ['M','N'], 
-              ['O','P'], ['Q','R'], ['S','T'], ['U','W'], ['X','Z'], ['AA','AD']
+              ['A','B'], ['C','F'], ['G','L'], ['M','N'], ['O','P'], 
+              ['Q','R'], ['S','T'], ['U','V'], ['W','X'], ['Y','AA'], ['AB','AD']
           ];
           for (let i = 0; i < detailInsertCount; i++) {
               const newRow = detailInsertPoint + i;
@@ -540,15 +540,15 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         }
 
         ws.cell(`C${r}`).value(item.location);
-        ws.cell(`F${r}`).value(item.description.trim() || item.category);
-        ws.cell(`K${r}`).value(getLocalCurr(item.currency));
-        ws.cell(`M${r}`).value(item.category === '交通費' ? item.amount : '');
-        ws.cell(`O${r}`).value(item.category === '住宿費' ? item.amount : '');
-        ws.cell(`Q${r}`).value(item.category === '膳雜費' ? item.amount : '');
-        ws.cell(`S${r}`).value(item.category === '交際費' ? item.amount : '');
-        ws.cell(`U${r}`).value(item.category === '其他費用' ? item.amount : '');
-        ws.cell(`X${r}`).value(item.projectCode);
-        ws.cell(`AA${r}`).value(item.category === '交通費' ? item.transportMode : '');
+        ws.cell(`G${r}`).value(item.description.trim() || item.category);
+        ws.cell(`M${r}`).value(getLocalCurr(item.currency));
+        ws.cell(`O${r}`).value(item.category === '交通費' ? item.amount : '');
+        ws.cell(`Q${r}`).value(item.category === '住宿費' ? item.amount : '');
+        ws.cell(`S${r}`).value(item.category === '膳雜費' ? item.amount : '');
+        ws.cell(`U${r}`).value(item.category === '交際費' ? item.amount : '');
+        ws.cell(`W${r}`).value(item.category === '其他費用' ? item.amount : '');
+        ws.cell(`Y${r}`).value(item.projectCode);
+        ws.cell(`AB${r}`).value(item.category === '交通費' ? item.transportMode : '');
 
         const descText = item.description.trim() || item.category;
         const calcLines = (str: string) => {
@@ -561,14 +561,14 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         
         ws.row(r).hidden(false);
         ws.row(r).height(Math.max(24, lineCount * 18));
-        ws.cell(`F${r}`).style('wrapText', true).style('verticalAlignment', 'top');
+        ws.cell(`G${r}`).style('wrapText', true).style('verticalAlignment', 'top');
         ws.cell(`C${r}`).style('wrapText', true).style('verticalAlignment', 'top');
       });
 
       if (numItems < reservedDetailRows) {
         for (let i = numItems; i < reservedDetailRows; i++) {
            const r = detailStartRow + i;
-           ['A','C','F','K','M','O','Q','S','U','X','AA'].forEach(col => ws.cell(`${col}${r}`).value(''));
+           ['A','C','G','M','O','Q','S','U','W','Y','AB'].forEach(col => ws.cell(`${col}${r}`).value(''));
         }
       }
 

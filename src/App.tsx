@@ -80,7 +80,7 @@ interface ExpenseReport {
 
 const CATEGORIES: ExpenseCategory[] = ['交通費', '住宿費', '膳雜費', '交際費', '其他費用'];
 const TRANSPORT_MODES: TransportMode[] = ['飛機', '高鐵', '火車', '捷運', '計程車', '租車', '其他'];
-const CURRENCIES = ['TWD', 'USD', 'EUR', 'JPY', 'CNY', 'HKD', 'GBP'];
+const CURRENCIES = ['TWD', 'USD', 'EUR', 'JPY', 'CNY', 'HKD', 'GBP', 'KRW', 'THB'];
 
 // --- Components ---
 
@@ -261,9 +261,11 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
           return m;
       };
 
-      // 改抓「明細第 1 列 (第 5 列)」作為全乾淨樣板，避免歷史操作導致末段樣板破損
-      const detailRow = detailStartRow; // 5
+      // 修正: 重新鎖定「模板最後一筆明細列 (精準第10列)」作為樣板，確保完整擷取出所有橫向結構
+      const detailRow = detailStartRow + reservedDetailRows - 1; // 10
       const detailMerges = getSingleRowMerges(detailRow);
+      
+      // 修正: 精準擷取 Totals 區標題與資料結構 (依據模板第11列與12列)
       const totalsTitleRow = totalsBaseRow; // 11
       const totalsTitleMerges = getSingleRowMerges(totalsTitleRow);
       const totalsDataRowTpl = totalsBaseRow + 1; // 12
@@ -414,7 +416,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
           // Phase C: 補回正確結構並防重疊與重複
           const colToInt = (col: string) => col.split('').reduce((acc, char) => acc * 26 + char.charCodeAt(0) - 64, 0);
           
-          const existingMerges: { sCol: number, eCol: number, sRow: number, eRow: number, ref: string }[] = [];
+          const existingMerges: { sCol: number, eCol: number, sRow: number, eRow: number, ref: string, node: Element }[] = [];
           Array.from(mergeCellsNode.getElementsByTagName('mergeCell')).forEach(mNode => {
               const ref = mNode.getAttribute('ref');
               if (!ref) return;
@@ -425,7 +427,8 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
                      sRow: parseInt(match[2], 10),
                      eCol: colToInt(match[3]),
                      eRow: parseInt(match[4], 10),
-                     ref
+                     ref,
+                     node: mNode
                  });
               }
           });
@@ -436,54 +439,40 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               const nSCol = colToInt(match[1]), nSRow = parseInt(match[2], 10);
               const nECol = colToInt(match[3]), nERow = parseInt(match[4], 10);
 
-              // 矩形交集檢查 (防止不同 ref 但範圍互卡的 Merge)
-              const isOverlapping = existingMerges.some(m => {
+              // 矩形交集檢查：新建的最優先，若強碰則拔除舊有的錯誤殘留
+              for (let j = existingMerges.length - 1; j >= 0; j--) {
+                  const m = existingMerges[j];
                   const overlapX = Math.max(nSCol, m.sCol) <= Math.min(nECol, m.eCol);
                   const overlapY = Math.max(nSRow, m.sRow) <= Math.min(nERow, m.eRow);
-                  return overlapX && overlapY;
-              });
-
-              if (isOverlapping) return; // 發生重疊，放棄新增，保留現有
+                  if (overlapX && overlapY) {
+                      if (m.ref === ref) return; // 已經加過了，不再加
+                      // 有重疊，拔除舊有殘留（只拔除此橫向，不碰上方固定區，因新增的列本身就在安全區）
+                      if (m.node.parentNode) {
+                          m.node.parentNode.removeChild(m.node);
+                      }
+                      existingMerges.splice(j, 1);
+                  }
+              }
               
               const mNode = doc.createElement('mergeCell');
               mNode.setAttribute('ref', ref);
               mergeCellsNode.appendChild(mNode);
-              existingMerges.push({sCol: nSCol, sRow: nSRow, eCol: nECol, eRow: nERow, ref});
+              existingMerges.push({sCol: nSCol, sRow: nSRow, eCol: nECol, eRow: nERow, ref, node: mNode});
           };
 
-          // 補上所有明細新增列必定要有的橫向 merge
+          // 任務 A: 補上所有明細新增列必定要有的橫向 merge (完整複製樣板)
           for (let i = 0; i < detailInsertCount; i++) {
               const newRow = detailInsertPoint + i;
               detailMerges.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
-              
-              // 強制補齊明細區必定需要的各欄位邊界 (防止樣板擷取不完整)
-              const detailFallback = [
-                  {sC: 'A', eC: 'B'}, {sC: 'C', eC: 'F'}, {sC: 'G', eC: 'L'},
-                  {sC: 'M', eC: 'N'}, {sC: 'O', eC: 'P'}, {sC: 'Q', eC: 'R'},
-                  {sC: 'S', eC: 'T'}, {sC: 'U', eC: 'V'}, {sC: 'W', eC: 'X'},
-                  {sC: 'Y', eC: 'AA'}, {sC: 'AB', eC: 'AD'}
-              ];
-              detailFallback.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
           }
 
-          // 核心: 獨立修正 Totals 區缺失 merge 的問題，補齊第一層與第二層列
+          // 任務 B: 獨立修正 Totals 區缺失 merge 的問題，補齊第一層標題
           totalsTitleMerges.forEach(m => appendMerge(`${m.sC}${newTotalsZoneStartRow}:${m.eC}${newTotalsZoneStartRow}`));
-          const titleFallback = [{sC: 'F', eC: 'O'}, {sC: 'P', eC: 'Y'}, {sC: 'Z', eC: 'AD'}];
-          titleFallback.forEach(m => appendMerge(`${m.sC}${newTotalsZoneStartRow}:${m.eC}${newTotalsZoneStartRow}`));
           
-          // totalsInsertCount 為「額外補插」的空列數。
-          // 0 代表單種幣別只維持原本 1 列，所以 i=0 一定會執行一次來修補原始那列。
+          // 任務 B: 補齊 Totals 區資料列所有幣別與合計欄位 (完整依賴模板結構)
           for (let i = 0; i <= totalsInsertCount; i++) {
               const newRow = newTotalsZoneStartRow + 1 + i;
               totalsDataMerges.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
-              
-              // 強制補上這三塊的幣別與合計 merge
-              const totalsFallback = [
-                  {sC: 'F', eC: 'G'}, {sC: 'H', eC: 'O'},
-                  {sC: 'P', eC: 'Q'}, {sC: 'R', eC: 'Y'},
-                  {sC: 'Z', eC: 'AA'}, {sC: 'AB', eC: 'AD'}
-              ];
-              totalsFallback.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
           }
           
           mergeCellsNode.setAttribute('count', String(existingMerges.length));
@@ -548,12 +537,36 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       ws.cell('R1').value(report.department);
       ws.cell('Y1').value(`${report.startDate} ~ ${report.endDate}`);
 
+      // 幣別中文化字典
+      const currMap: Record<string, string> = {
+          'TWD': '台幣',
+          'USD': '美金',
+          'EUR': '歐元',
+          'JPY': '日幣',
+          'RMB': '人民幣',
+          'CNY': '人民幣',
+          'HKD': '港幣',
+          'KRW': '韓圜',
+          'GBP': '英鎊',
+          'THB': '泰銖'
+      };
+      const getLocalCurr = (c: string) => currMap[c] || c;
+
       report.items.forEach((item, index) => {
         const r = detailStartRow + index;
-        ws.cell(`A${r}`).value(item.date);
+        
+        const dateParts = item.date.split('-');
+        if (dateParts.length === 3) {
+            const [y, m, d] = dateParts;
+            const dateObj = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+            ws.cell(`A${r}`).value(dateObj).style('numberFormat', 'm/d');
+        } else {
+            ws.cell(`A${r}`).value(item.date);
+        }
+
         ws.cell(`C${r}`).value(item.location);
         ws.cell(`G${r}`).value(item.description.trim() || item.category);
-        ws.cell(`M${r}`).value(item.currency); // User: 直接沿用文件匯出的值
+        ws.cell(`M${r}`).value(getLocalCurr(item.currency));
         ws.cell(`O${r}`).value(item.category === '交通費' ? item.amount : '');
         ws.cell(`Q${r}`).value(item.category === '住宿費' ? item.amount : '');
         ws.cell(`S${r}`).value(item.category === '膳雜費' ? item.amount : '');
@@ -590,9 +603,10 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       
       currsToRender.forEach((curr, i) => {
            const r = totalsDataRow + i;
+           const localCurr = getLocalCurr(curr);
            
            if (expenseTotals[curr] !== undefined) {
-               ws.cell(`F${r}`).value(curr);
+               ws.cell(`F${r}`).value(localCurr);
                ws.cell(`H${r}`).value(expenseTotals[curr]);
            } else {
                ws.cell(`F${r}`).value('');
@@ -600,14 +614,14 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
            }
 
            if (prepaidTotals[curr] !== undefined) {
-               ws.cell(`P${r}`).value(curr);
+               ws.cell(`P${r}`).value(localCurr);
                ws.cell(`R${r}`).value(prepaidTotals[curr]);
            } else {
                ws.cell(`P${r}`).value('');
                ws.cell(`R${r}`).value('');
            }
 
-           ws.cell(`Z${r}`).value(curr);
+           ws.cell(`Z${r}`).value(localCurr);
            ws.cell(`AB${r}`).value((expenseTotals[curr] || 0) - (prepaidTotals[curr] || 0));
       });
 

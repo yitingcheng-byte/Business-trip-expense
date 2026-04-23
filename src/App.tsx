@@ -215,7 +215,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       // 1. Calculations
       const detailStartRow = 5;
       const reservedDetailRows = 6; 
-      const totalsBaseRow = 11;
+      const templateTotalsDataRow = 14;
       
       const numItems = report.items.length;
       const detailInsertCount = Math.max(0, numItems - reservedDetailRows);
@@ -247,7 +247,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       // 增量修補 1: 處理 mergeCells
       let mergeCellsNode = doc.getElementsByTagName('mergeCells')[0];
 
-      // 執行 Row 插列與移位
+      // Drawing 移位
       const doRowCloneAndShift = (insertAt: number, shiftCount: number, cloneRow: number) => {
           if (shiftCount <= 0) return;
           const rows = Array.from(sheetData.getElementsByTagName('row')); // 每次執行前即時抓取最新 row 節點
@@ -313,7 +313,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       if (mergeCellsNode) {
           // 定義區域邊界 (原始 Template 座標系統)
           const originalDetailEnd = detailStartRow + reservedDetailRows - 1; // == 10
-          const originalFooterStart = totalsBaseRow + 2; // == 13
+          const originalFooterStart = templateTotalsDataRow + 1; // == 15
 
           let mNodes = Array.from(mergeCellsNode.getElementsByTagName('mergeCell'));
 
@@ -403,6 +403,8 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
                   const overlapY = Math.max(nSRow, m.sRow) <= Math.min(nERow, m.eRow);
                   if (overlapX && overlapY) {
                       if (m.ref === ref) return; // 完全一樣就跳過
+                      
+                      // 發現重疊 (不論是本列橫向還是跨列)，全部先局部刪除舊殘留
                       if (m.node.parentNode) {
                           m.node.parentNode.removeChild(m.node);
                       }
@@ -410,7 +412,17 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
                   }
               }
               
-              const mNode = doc.createElement('mergeCell');
+              // 修正：使用現有的 namespace 或克隆現有的 node 來確保 Excel 辨識 mergeCell 標籤
+              let mNode: Element;
+              const firstMerge = existingMerges.length > 0 ? existingMerges[0].node : null;
+              if (firstMerge) {
+                  mNode = firstMerge.cloneNode(false) as Element;
+              } else {
+                  // Fallback: Excel JSZip default NS
+                  const ns = mergeCellsNode.namespaceURI || 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+                  mNode = doc.createElementNS(ns, 'mergeCell');
+              }
+              
               mNode.setAttribute('ref', ref);
               mergeCellsNode.appendChild(mNode);
               existingMerges.push({sCol: nSCol, sRow: nSRow, eCol: nECol, eRow: nERow, ref, node: mNode});
@@ -419,7 +431,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
           // 任務 A: 負責新增明細列固定 merge
           // 當明細 > 6 筆，將固定座標 merge 新增到每一个被插人的列
           const detailFixedSpans = [
-              ['A','B'], ['C','E'], ['F','J'], ['K','L'], ['M','N'],
+              ['A','B'], ['C','E'], ['F','J'], ['K','L'], ['M','N'], 
               ['O','P'], ['Q','R'], ['S','T'], ['U','W'], ['X','Z'], ['AA','AD']
           ];
           for (let i = 0; i < detailInsertCount; i++) {
@@ -428,17 +440,14 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
           }
 
           // 任務 B: 負責 totals 區固定 merge
-          // 使用固定座標針對 Totals 資料列建立幣別與合計，包含第14列或因插列被推後的列
-          const newTotalsZoneStartRow = currentTotalsBaseRowAfterDetail;
+          // 使用固定座標針對 Totals 資料列建立幣別與合計
           const totalsFixedSpans = [
               ['F','G'], ['H','J'],   // 費用報支合計
               ['P','Q'], ['R','T'],   // 已先預支費用
               ['Z','AA'], ['AB','AD'] // 應付員工或員工繳回
           ];
           for (let i = 0; i <= totalsInsertCount; i++) {
-              // start is title row, start + 1 is the first data row
-              const newRow = newTotalsZoneStartRow + 1 + i;
-              totalsFixedSpans.forEach(span => appendMerge(span[0], span[1], newRow));
+              totalsFixedSpans.forEach(span => appendMerge(span[0], span[1], currentTotalsDataRow + i));
           }
           
           mergeCellsNode.setAttribute('count', String(existingMerges.length));
@@ -564,11 +573,11 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       }
 
       // Generate Totals Data
-      const totalsDataRow = currentTotalsBaseRowAfterDetail + 1; // normally 12
+      const totalsDataRowStart = currentTotalsDataRow; // 14
       const currsToRender = allCurrencies.length > 0 ? allCurrencies : ['TWD'];
       
       currsToRender.forEach((curr, i) => {
-           const r = totalsDataRow + i;
+           const r = totalsDataRowStart + i;
            const localCurr = getLocalCurr(curr);
            
            if (expenseTotals[curr] !== undefined) {

@@ -215,7 +215,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       // 1. Calculations
       const detailStartRow = 5;
       const reservedDetailRows = 6; 
-      const templateTotalsDataRow = 14;
+      const templateTotalsDataRow = 12;
       
       const numItems = report.items.length;
       const detailInsertCount = Math.max(0, numItems - reservedDetailRows);
@@ -313,7 +313,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       if (mergeCellsNode) {
           // 定義區域邊界 (原始 Template 座標系統)
           const originalDetailEnd = detailStartRow + reservedDetailRows - 1; // == 10
-          const originalFooterStart = templateTotalsDataRow + 1; // == 15
+          const originalFooterStart = templateTotalsDataRow + 1;
 
           let mNodes = Array.from(mergeCellsNode.getElementsByTagName('mergeCell'));
 

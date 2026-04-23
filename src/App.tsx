@@ -244,32 +244,8 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       const worksheetNode = sheetData.parentNode as Element | null;
       if (!worksheetNode) throw new Error("Invalid worksheet XML");
 
-      // 增量修補 1: 取得樣板橫向 merge
+      // 增量修補 1: 處理 mergeCells
       let mergeCellsNode = doc.getElementsByTagName('mergeCells')[0];
-      const getSingleRowMerges = (rowIndex: number) => {
-          const m: {sC: string, eC: string}[] = [];
-          if (!mergeCellsNode) return m;
-          Array.from(mergeCellsNode.getElementsByTagName('mergeCell')).forEach(cell => {
-             const ref = cell.getAttribute('ref');
-             if(!ref) return;
-             const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
-             if(!match) return;
-             if (parseInt(match[2], 10) === rowIndex && parseInt(match[4], 10) === rowIndex) {
-                 m.push({sC: match[1], eC: match[3]});
-             }
-          });
-          return m;
-      };
-
-      // 修正: 重新鎖定「模板最後一筆明細列 (精準第10列)」作為樣板，確保完整擷取出所有橫向結構
-      const detailRow = detailStartRow + reservedDetailRows - 1; // 10
-      const detailMerges = getSingleRowMerges(detailRow);
-      
-      // 修正: 精準擷取 Totals 區標題與資料結構 (依據模板第11列與12列)
-      const totalsTitleRow = totalsBaseRow; // 11
-      const totalsTitleMerges = getSingleRowMerges(totalsTitleRow);
-      const totalsDataRowTpl = totalsBaseRow + 1; // 12
-      const totalsDataMerges = getSingleRowMerges(totalsDataRowTpl);
 
       // 執行 Row 插列與移位
       const doRowCloneAndShift = (insertAt: number, shiftCount: number, cloneRow: number) => {
@@ -394,26 +370,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               }
           });
 
-          // Phase B: 局部清除 Totals 區衝突
-          const newTotalsZoneStartRow = currentTotalsBaseRowAfterDetail;
-          const newTotalsZoneEndRow = currentTotalsBaseRowAfterDetail + 1 + totalsInsertCount;
-
-          mNodes.forEach(mNode => {
-              const ref = mNode.getAttribute('ref');
-              if (!ref) return;
-              const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
-              if (!match) return;
-              let sRow = parseInt(match[2], 10);
-              let eRow = parseInt(match[4], 10);
-              
-              // 【精確刪除】：只清除 Totals 範圍裡面那些已經因為重疊亂掉的「單列橫向」merge
-              // 不刪跨越多列的結構 (sRow === eRow)，這保證前面展延的垂直合併格被安全保留下來
-              if (sRow >= newTotalsZoneStartRow && eRow <= newTotalsZoneEndRow && sRow === eRow) {
-                  mNode.remove();
-              }
-          });
-
-          // Phase C: 補回正確結構並防重疊與重複
+          // Phase C: 依固定座標重建新增的 merge (防重疊與重複)
           const colToInt = (col: string) => col.split('').reduce((acc, char) => acc * 26 + char.charCodeAt(0) - 64, 0);
           
           const existingMerges: { sCol: number, eCol: number, sRow: number, eRow: number, ref: string, node: Element }[] = [];
@@ -433,20 +390,18 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               }
           });
           
-          const appendMerge = (ref: string) => {
-              const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
-              if (!match) return;
-              const nSCol = colToInt(match[1]), nSRow = parseInt(match[2], 10);
-              const nECol = colToInt(match[3]), nERow = parseInt(match[4], 10);
+          const appendMerge = (sCol: string, eCol: string, targetRow: number) => {
+              const ref = `${sCol}${targetRow}:${eCol}${targetRow}`;
+              const nSCol = colToInt(sCol), nSRow = targetRow;
+              const nECol = colToInt(eCol), nERow = targetRow;
 
-              // 矩形交集檢查：新建的最優先，若強碰則拔除舊有的錯誤殘留
+              // 矩形交集檢查：若欲寫入的新 merge 與現有 merge 強碰，自動將舊有衝突 merge 拔除 (局部清除原則)
               for (let j = existingMerges.length - 1; j >= 0; j--) {
                   const m = existingMerges[j];
                   const overlapX = Math.max(nSCol, m.sCol) <= Math.min(nECol, m.eCol);
                   const overlapY = Math.max(nSRow, m.sRow) <= Math.min(nERow, m.eRow);
                   if (overlapX && overlapY) {
-                      if (m.ref === ref) return; // 已經加過了，不再加
-                      // 有重疊，拔除舊有殘留（只拔除此橫向，不碰上方固定區，因新增的列本身就在安全區）
+                      if (m.ref === ref) return; // 完全一樣就跳過
                       if (m.node.parentNode) {
                           m.node.parentNode.removeChild(m.node);
                       }
@@ -460,19 +415,29 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               existingMerges.push({sCol: nSCol, sRow: nSRow, eCol: nECol, eRow: nERow, ref, node: mNode});
           };
 
-          // 任務 A: 補上所有明細新增列必定要有的橫向 merge (完整複製樣板)
+          // 任務 A: 負責新增明細列固定 merge
+          // 當明細 > 6 筆，將固定座標 merge 新增到每一个被插人的列
+          const detailFixedSpans = [
+              ['A','B'], ['C','E'], ['F','J'], ['K','L'], ['M','N'],
+              ['O','P'], ['Q','R'], ['S','T'], ['U','W'], ['X','Z'], ['AA','AD']
+          ];
           for (let i = 0; i < detailInsertCount; i++) {
               const newRow = detailInsertPoint + i;
-              detailMerges.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
+              detailFixedSpans.forEach(span => appendMerge(span[0], span[1], newRow));
           }
 
-          // 任務 B: 獨立修正 Totals 區缺失 merge 的問題，補齊第一層標題
-          totalsTitleMerges.forEach(m => appendMerge(`${m.sC}${newTotalsZoneStartRow}:${m.eC}${newTotalsZoneStartRow}`));
-          
-          // 任務 B: 補齊 Totals 區資料列所有幣別與合計欄位 (完整依賴模板結構)
+          // 任務 B: 負責 totals 區固定 merge
+          // 使用固定座標針對 Totals 資料列建立幣別與合計，包含第14列或因插列被推後的列
+          const newTotalsZoneStartRow = currentTotalsBaseRowAfterDetail;
+          const totalsFixedSpans = [
+              ['F','G'], ['H','J'],   // 費用報支合計
+              ['P','Q'], ['R','T'],   // 已先預支費用
+              ['Z','AA'], ['AB','AD'] // 應付員工或員工繳回
+          ];
           for (let i = 0; i <= totalsInsertCount; i++) {
+              // start is title row, start + 1 is the first data row
               const newRow = newTotalsZoneStartRow + 1 + i;
-              totalsDataMerges.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
+              totalsFixedSpans.forEach(span => appendMerge(span[0], span[1], newRow));
           }
           
           mergeCellsNode.setAttribute('count', String(existingMerges.length));
@@ -565,15 +530,15 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         }
 
         ws.cell(`C${r}`).value(item.location);
-        ws.cell(`G${r}`).value(item.description.trim() || item.category);
-        ws.cell(`M${r}`).value(getLocalCurr(item.currency));
-        ws.cell(`O${r}`).value(item.category === '交通費' ? item.amount : '');
-        ws.cell(`Q${r}`).value(item.category === '住宿費' ? item.amount : '');
-        ws.cell(`S${r}`).value(item.category === '膳雜費' ? item.amount : '');
-        ws.cell(`U${r}`).value(item.category === '交際費' ? item.amount : '');
-        ws.cell(`W${r}`).value(item.category === '其他費用' ? item.amount : '');
-        ws.cell(`Y${r}`).value(item.projectCode);
-        ws.cell(`AB${r}`).value(item.category === '交通費' ? item.transportMode : '');
+        ws.cell(`F${r}`).value(item.description.trim() || item.category);
+        ws.cell(`K${r}`).value(getLocalCurr(item.currency));
+        ws.cell(`M${r}`).value(item.category === '交通費' ? item.amount : '');
+        ws.cell(`O${r}`).value(item.category === '住宿費' ? item.amount : '');
+        ws.cell(`Q${r}`).value(item.category === '膳雜費' ? item.amount : '');
+        ws.cell(`S${r}`).value(item.category === '交際費' ? item.amount : '');
+        ws.cell(`U${r}`).value(item.category === '其他費用' ? item.amount : '');
+        ws.cell(`X${r}`).value(item.projectCode);
+        ws.cell(`AA${r}`).value(item.category === '交通費' ? item.transportMode : '');
 
         const descText = item.description.trim() || item.category;
         const calcLines = (str: string) => {
@@ -586,14 +551,14 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
         
         ws.row(r).hidden(false);
         ws.row(r).height(Math.max(24, lineCount * 18));
-        ws.cell(`G${r}`).style('wrapText', true).style('verticalAlignment', 'top');
+        ws.cell(`F${r}`).style('wrapText', true).style('verticalAlignment', 'top');
         ws.cell(`C${r}`).style('wrapText', true).style('verticalAlignment', 'top');
       });
 
       if (numItems < reservedDetailRows) {
         for (let i = numItems; i < reservedDetailRows; i++) {
            const r = detailStartRow + i;
-           ['A','C','G','M','O','Q','S','U','W','Y','AB'].forEach(col => ws.cell(`${col}${r}`).value(''));
+           ['A','C','F','K','M','O','Q','S','U','X','AA'].forEach(col => ws.cell(`${col}${r}`).value(''));
         }
       }
 

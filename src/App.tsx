@@ -261,7 +261,8 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
           return m;
       };
 
-      const detailRow = detailStartRow + reservedDetailRows - 1; // 10
+      // 改抓「明細第 1 列 (第 5 列)」作為全乾淨樣板，避免歷史操作導致末段樣板破損
+      const detailRow = detailStartRow; // 5
       const detailMerges = getSingleRowMerges(detailRow);
       const totalsTitleRow = totalsBaseRow; // 11
       const totalsTitleMerges = getSingleRowMerges(totalsTitleRow);
@@ -410,38 +411,82 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               }
           });
 
-          // Phase C: 補回正確結構並防重複
-          const existingRefs = new Set<string>();
+          // Phase C: 補回正確結構並防重疊與重複
+          const colToInt = (col: string) => col.split('').reduce((acc, char) => acc * 26 + char.charCodeAt(0) - 64, 0);
+          
+          const existingMerges: { sCol: number, eCol: number, sRow: number, eRow: number, ref: string }[] = [];
           Array.from(mergeCellsNode.getElementsByTagName('mergeCell')).forEach(mNode => {
               const ref = mNode.getAttribute('ref');
-              if (ref) existingRefs.add(ref);
+              if (!ref) return;
+              const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+              if (match) {
+                 existingMerges.push({
+                     sCol: colToInt(match[1]),
+                     sRow: parseInt(match[2], 10),
+                     eCol: colToInt(match[3]),
+                     eRow: parseInt(match[4], 10),
+                     ref
+                 });
+              }
           });
           
           const appendMerge = (ref: string) => {
-              if (existingRefs.has(ref)) return; 
+              const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+              if (!match) return;
+              const nSCol = colToInt(match[1]), nSRow = parseInt(match[2], 10);
+              const nECol = colToInt(match[3]), nERow = parseInt(match[4], 10);
+
+              // 矩形交集檢查 (防止不同 ref 但範圍互卡的 Merge)
+              const isOverlapping = existingMerges.some(m => {
+                  const overlapX = Math.max(nSCol, m.sCol) <= Math.min(nECol, m.eCol);
+                  const overlapY = Math.max(nSRow, m.sRow) <= Math.min(nERow, m.eRow);
+                  return overlapX && overlapY;
+              });
+
+              if (isOverlapping) return; // 發生重疊，放棄新增，保留現有
+              
               const mNode = doc.createElement('mergeCell');
               mNode.setAttribute('ref', ref);
               mergeCellsNode.appendChild(mNode);
-              existingRefs.add(ref);
+              existingMerges.push({sCol: nSCol, sRow: nSRow, eCol: nECol, eRow: nERow, ref});
           };
 
           // 補上所有明細新增列必定要有的橫向 merge
           for (let i = 0; i < detailInsertCount; i++) {
               const newRow = detailInsertPoint + i;
               detailMerges.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
+              
+              // 強制補齊明細區必定需要的各欄位邊界 (防止樣板擷取不完整)
+              const detailFallback = [
+                  {sC: 'A', eC: 'B'}, {sC: 'C', eC: 'F'}, {sC: 'G', eC: 'L'},
+                  {sC: 'M', eC: 'N'}, {sC: 'O', eC: 'P'}, {sC: 'Q', eC: 'R'},
+                  {sC: 'S', eC: 'T'}, {sC: 'U', eC: 'V'}, {sC: 'W', eC: 'X'},
+                  {sC: 'Y', eC: 'AA'}, {sC: 'AB', eC: 'AD'}
+              ];
+              detailFallback.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
           }
 
           // 核心: 獨立修正 Totals 區缺失 merge 的問題，補齊第一層與第二層列
           totalsTitleMerges.forEach(m => appendMerge(`${m.sC}${newTotalsZoneStartRow}:${m.eC}${newTotalsZoneStartRow}`));
+          const titleFallback = [{sC: 'F', eC: 'O'}, {sC: 'P', eC: 'Y'}, {sC: 'Z', eC: 'AD'}];
+          titleFallback.forEach(m => appendMerge(`${m.sC}${newTotalsZoneStartRow}:${m.eC}${newTotalsZoneStartRow}`));
           
           // totalsInsertCount 為「額外補插」的空列數。
           // 0 代表單種幣別只維持原本 1 列，所以 i=0 一定會執行一次來修補原始那列。
           for (let i = 0; i <= totalsInsertCount; i++) {
               const newRow = newTotalsZoneStartRow + 1 + i;
               totalsDataMerges.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
+              
+              // 強制補上這三塊的幣別與合計 merge
+              const totalsFallback = [
+                  {sC: 'F', eC: 'G'}, {sC: 'H', eC: 'O'},
+                  {sC: 'P', eC: 'Q'}, {sC: 'R', eC: 'Y'},
+                  {sC: 'Z', eC: 'AA'}, {sC: 'AB', eC: 'AD'}
+              ];
+              totalsFallback.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
           }
           
-          mergeCellsNode.setAttribute('count', String(existingRefs.size));
+          mergeCellsNode.setAttribute('count', String(existingMerges.length));
       }
 
       // 修正 dimension

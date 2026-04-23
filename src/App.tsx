@@ -287,9 +287,9 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       const detailTemplateRow = detailStartRow + reservedDetailRows - 1; // 10
       doRowCloneAndShift(detailInsertPoint, detailInsertCount, detailTemplateRow);
       
-      const currentTotalsBaseRowAfterDetail = totalsBaseRow + detailInsertCount;
-      const totalsInsertPoint = currentTotalsBaseRowAfterDetail + 2; 
-      doRowCloneAndShift(totalsInsertPoint, totalsInsertCount, currentTotalsBaseRowAfterDetail + 1);
+      const currentTotalsDataRow = templateTotalsDataRow + detailInsertCount;
+      const totalsInsertPoint = currentTotalsDataRow + 1; 
+      doRowCloneAndShift(totalsInsertPoint, totalsInsertCount, currentTotalsDataRow);
 
       // Drawing 移位
       const shiftDrawings = async (targetZip: JSZip, insertAt: number, shiftCount: number) => {

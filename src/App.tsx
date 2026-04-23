@@ -232,10 +232,9 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       const numCurrencies = Math.max(1, allCurrencies.length);
       const totalsInsertCount = Math.max(0, numCurrencies - 1);
 
-      // 2. JSZip safe shift and merge rebuild
+      // 2. JSZip safe shift module
       const zip = await JSZip.loadAsync(arrayBuffer);
       zip.remove('xl/calcChain.xml');
-
       const sheetPath = 'xl/worksheets/sheet1.xml';
       const file = zip.file(sheetPath);
       if (!file) throw new Error("Template misses sheet1.xml");
@@ -245,174 +244,227 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       const worksheetNode = sheetData.parentNode as Element | null;
       if (!worksheetNode) throw new Error("Invalid worksheet XML");
 
-      // Setup MergeCells Array
-      const mergeCellsNode = doc.getElementsByTagName('mergeCells')[0];
-      type MergeRange = { startCol: string, startRow: number, endCol: string, endRow: number };
-      let merges: MergeRange[] = [];
-      if (mergeCellsNode) {
-        Array.from(mergeCellsNode.getElementsByTagName('mergeCell')).forEach(m => {
-          const ref = m.getAttribute('ref');
-          if (!ref) return;
-          const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
-          if (!match) return;
-          merges.push({
-            startCol: match[1], startRow: parseInt(match[2], 10),
-            endCol: match[3], endRow: parseInt(match[4], 10)
+      // 增量修補 1: 取得樣板橫向 merge
+      let mergeCellsNode = doc.getElementsByTagName('mergeCells')[0];
+      const getSingleRowMerges = (rowIndex: number) => {
+          const m: {sC: string, eC: string}[] = [];
+          if (!mergeCellsNode) return m;
+          Array.from(mergeCellsNode.getElementsByTagName('mergeCell')).forEach(cell => {
+             const ref = cell.getAttribute('ref');
+             if(!ref) return;
+             const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+             if(!match) return;
+             if (parseInt(match[2], 10) === rowIndex && parseInt(match[4], 10) === rowIndex) {
+                 m.push({sC: match[1], eC: match[3]});
+             }
           });
-        });
-      }
-
-      // Snapshot totals merge rules from the original untouched template (Anchor-based)
-      const totalsTitleMergesTpl = merges.filter(m => m.startRow === totalsBaseRow && m.endRow === totalsBaseRow).map(m => ({...m}));
-      const totalsDataMergesTpl = merges.filter(m => m.startRow === totalsBaseRow + 1 && m.endRow === totalsBaseRow + 1).map(m => ({...m}));
-
-      const shiftAndCloneRows = (insertAt: number, shiftCount: number, cloneRow: number) => {
-        if (shiftCount <= 0) return;
-        const rows = Array.from(sheetData.getElementsByTagName('row'));
-
-        rows.forEach(row => {
-          const rAttr = parseInt(row.getAttribute('r') || '0', 10);
-          if (rAttr >= insertAt) {
-            row.setAttribute('r', String(rAttr + shiftCount));
-            Array.from(row.getElementsByTagName('c')).forEach(c => {
-              const ref = c.getAttribute('r');
-              if (ref) c.setAttribute('r', ref.replace(/([A-Z]+)(\d+)/, (_, col, rowNum) => `${col}${parseInt(rowNum) + shiftCount}`));
-            });
-          }
-        });
-
-        let templateRowNode = rows.find(r => parseInt(r.getAttribute('r') || '0', 10) === cloneRow);
-        if (templateRowNode) {
-           for (let i = 0; i < shiftCount; i++) {
-             const newRow = templateRowNode.cloneNode(true) as Element;
-             const newRowNum = insertAt + i;
-             newRow.setAttribute('r', String(newRowNum));
-
-             Array.from(newRow.getElementsByTagName('c')).forEach((c: any) => {
-               const ref = c.getAttribute('r');
-               if (ref) c.setAttribute('r', ref.replace(/([A-Z]+)(\d+)/, (_, col) => `${col}${newRowNum}`));
-               c.removeAttribute('t');
-               Array.from(c.getElementsByTagName('v')).forEach((n: any) => n.remove());
-               Array.from(c.getElementsByTagName('is')).forEach((n: any) => n.remove());
-               Array.from(c.getElementsByTagName('f')).forEach((n: any) => n.remove());
-             });
-
-             const allCurrentRows = Array.from(sheetData.getElementsByTagName('row'));
-             const nextRow = allCurrentRows.find(r => parseInt(r.getAttribute('r') || '0', 10) > newRowNum);
-             if (nextRow) sheetData.insertBefore(newRow, nextRow);
-             else sheetData.appendChild(newRow);
-           }
-        }
-
-        const newMerges: MergeRange[] = [];
-        merges.forEach(m => {
-            if (m.startRow >= insertAt) {
-                newMerges.push({ ...m, startRow: m.startRow + shiftCount, endRow: m.endRow + shiftCount });
-            } else if (m.startRow < insertAt && m.endRow >= insertAt) {
-                newMerges.push({ ...m, endRow: m.endRow + shiftCount });
-            } else {
-                newMerges.push({ ...m });
-            }
-
-            // Copy template row's single-row horizontal merges to new rows explicitly
-            if (m.startRow === cloneRow && m.endRow === cloneRow) {
-                for (let i = 0; i < shiftCount; i++) {
-                    newMerges.push({ ...m, startRow: insertAt + i, endRow: insertAt + i });
-                }
-            }
-        });
-        merges = newMerges;
-
-        const dimensionNode = doc.getElementsByTagName('dimension')[0];
-        if (dimensionNode) {
-           const ref = dimensionNode.getAttribute('ref');
-           if (ref) {
-              const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
-              if (match) {
-                 const newEndRow = parseInt(match[4], 10) + shiftCount;
-                 dimensionNode.setAttribute('ref', `${match[1]}${match[2]}:${match[3]}${newEndRow}`);
-              }
-           }
-        }
+          return m;
       };
 
+      const detailRow = detailStartRow + reservedDetailRows - 1; // 10
+      const detailMerges = getSingleRowMerges(detailRow);
+      const totalsTitleRow = totalsBaseRow; // 11
+      const totalsTitleMerges = getSingleRowMerges(totalsTitleRow);
+      const totalsDataRowTpl = totalsBaseRow + 1; // 12
+      const totalsDataMerges = getSingleRowMerges(totalsDataRowTpl);
+
+      // 執行 Row 插列與移位
+      const doRowCloneAndShift = (insertAt: number, shiftCount: number, cloneRow: number) => {
+          if (shiftCount <= 0) return;
+          const rows = Array.from(sheetData.getElementsByTagName('row')); // 每次執行前即時抓取最新 row 節點
+          rows.forEach(row => {
+            const rAttr = parseInt(row.getAttribute('r') || '0', 10);
+            if (rAttr >= insertAt) {
+              row.setAttribute('r', String(rAttr + shiftCount));
+              Array.from(row.getElementsByTagName('c')).forEach(c => {
+                const ref = c.getAttribute('r');
+                if (ref) c.setAttribute('r', ref.replace(/([A-Z]+)(\d+)/, (_, col, rowNum) => `${col}${parseInt(rowNum) + shiftCount}`));
+              });
+            }
+          });
+          let templateRowNode = rows.find(r => parseInt(r.getAttribute('r') || '0', 10) === cloneRow);
+          if (templateRowNode) {
+             for (let i = 0; i < shiftCount; i++) {
+               const newRow = templateRowNode.cloneNode(true) as Element;
+               const newRowNum = insertAt + i;
+               newRow.setAttribute('r', String(newRowNum));
+               Array.from(newRow.getElementsByTagName('c')).forEach((c: any) => {
+                 const ref = c.getAttribute('r');
+                 if (ref) c.setAttribute('r', ref.replace(/([A-Z]+)(\d+)/, (_, col) => `${col}${newRowNum}`));
+                 c.removeAttribute('t');
+                 Array.from(c.getElementsByTagName('v')).forEach((n: any) => n.remove());
+                 Array.from(c.getElementsByTagName('is')).forEach((n: any) => n.remove());
+                 Array.from(c.getElementsByTagName('f')).forEach((n: any) => n.remove());
+               });
+               const allCurrentRows = Array.from(sheetData.getElementsByTagName('row'));
+               const nextRow = allCurrentRows.find(r => parseInt(r.getAttribute('r') || '0', 10) > newRowNum);
+               if (nextRow) sheetData.insertBefore(newRow, nextRow);
+               else sheetData.appendChild(newRow);
+             }
+          }
+      };
+
+      const detailInsertPoint = detailStartRow + reservedDetailRows;
+      doRowCloneAndShift(detailInsertPoint, detailInsertCount, detailRow);
+      
+      const currentTotalsBaseRowAfterDetail = totalsBaseRow + detailInsertCount;
+      const totalsInsertPoint = currentTotalsBaseRowAfterDetail + 2; 
+      doRowCloneAndShift(totalsInsertPoint, totalsInsertCount, currentTotalsBaseRowAfterDetail + 1);
+
+      // Drawing 移位
       const shiftDrawings = async (targetZip: JSZip, insertAt: number, shiftCount: number) => {
          if (shiftCount <= 0) return;
          const drawingFiles = Object.keys(targetZip.files).filter(k => k.startsWith('xl/drawings/drawing') && k.endsWith('.xml'));
          for (const file of drawingFiles) {
-             let xmlStr = await targetZip.file(file)?.async('string');
-             if (!xmlStr) continue;
-             xmlStr = xmlStr.replace(/<xdr:row>(\d+)<\/xdr:row>/g, (match, rStr) => {
+             let xml = await targetZip.file(file)?.async('string');
+             if (!xml) continue;
+             xml = xml.replace(/<xdr:row>(\d+)<\/xdr:row>/g, (match, rStr) => {
                  let r = parseInt(rStr, 10);
                  if (r >= (insertAt - 1)) r += shiftCount;
                  return `<xdr:row>${r}</xdr:row>`;
              });
-             targetZip.file(file, xmlStr);
+             targetZip.file(file, xml);
          }
       };
+      if (detailInsertCount > 0) await shiftDrawings(zip, detailInsertPoint, detailInsertCount);
+      if (totalsInsertCount > 0) await shiftDrawings(zip, totalsInsertPoint, totalsInsertCount);
 
-      // Shifting operations (Updates 'merges' implicitly)
-      let currentTotalsBaseRow = totalsBaseRow;
-      
-      // A. Expand Details
-      if (detailInsertCount > 0) {
-        const insertRowIndex = detailStartRow + reservedDetailRows;
-        const cloneRowIndex = insertRowIndex - 1;
-        shiftAndCloneRows(insertRowIndex, detailInsertCount, cloneRowIndex);
-        await shiftDrawings(zip, insertRowIndex, detailInsertCount);
-        currentTotalsBaseRow += detailInsertCount;
-      }
-
-      // B. Expand Totals
-      if (totalsInsertCount > 0) {
-        const dataRowIndex = currentTotalsBaseRow + 1; // row 12 is data row
-        const insertPoint = dataRowIndex + 1;
-        shiftAndCloneRows(insertPoint, totalsInsertCount, dataRowIndex);
-        await shiftDrawings(zip, insertPoint, totalsInsertCount);
-      }
-
-      // --- Explicitly rebuild Totals Area Merges ---
-      const totalsEndRow = currentTotalsBaseRow + 1 + totalsInsertCount;
-      // 1. Remove all old merges in the totals region
-      merges = merges.filter(m => !(m.startRow >= currentTotalsBaseRow && m.endRow <= totalsEndRow));
-      // 2. Re-apply title merges
-      totalsTitleMergesTpl.forEach(t => {
-          merges.push({ ...t, startRow: currentTotalsBaseRow, endRow: currentTotalsBaseRow });
-      });
-      // 3. Re-apply data merges
-      for (let i = 0; i <= totalsInsertCount; i++) {
-          let r = currentTotalsBaseRow + 1 + i;
-          totalsDataMergesTpl.forEach(t => {
-              merges.push({ ...t, startRow: r, endRow: r });
-          });
-      }
-
-      // --- Write merges back to XML ---
+      // 增量修補 2: 處理 mergeCells
       if (mergeCellsNode) {
-          Array.from(mergeCellsNode.children).forEach(c => c.remove());
-          const uniqueMerges = new Map<string, MergeRange>();
-          merges.forEach(m => {
-             const ref = `${m.startCol}${m.startRow}:${m.endCol}${m.endRow}`;
-             uniqueMerges.set(ref, m);
+          // 定義區域邊界 (原始 Template 座標系統)
+          const originalDetailEnd = detailStartRow + reservedDetailRows - 1; // == 10
+          const originalFooterStart = totalsBaseRow + 2; // == 13
+
+          let mNodes = Array.from(mergeCellsNode.getElementsByTagName('mergeCell'));
+
+          // Phase A: 位移與延展處理
+          mNodes.forEach(mNode => {
+              const ref = mNode.getAttribute('ref');
+              if (!ref) return;
+              const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+              if (!match) return;
+              
+              let sCol = match[1], sRow = parseInt(match[2], 10);
+              let eCol = match[3], eRow = parseInt(match[4], 10);
+              
+              // 【明確保護 1：表頭 / Logo / 文件等級 / ISO 區】
+              // 若儲存格的起始與結束皆落在 10 以前 (即明細區與其上方)，絕對不變更它
+              if (sRow <= originalDetailEnd && eRow <= originalDetailEnd) return;
+
+              // 【明確保護 2：簽核區 / 會辦單位區】
+              // 若完全落在原本 Totals (11~12) 下方(例如 13+)，對內部結構 100% 保留
+              // 只做隨明細與幣別變化的整體座標加總「下推平移」
+              if (sRow >= originalFooterStart) {
+                  sRow += (detailInsertCount + totalsInsertCount);
+                  eRow += (detailInsertCount + totalsInsertCount);
+                  mNode.setAttribute('ref', `${sCol}${sRow}:${eCol}${eRow}`);
+                  return;
+              }
+
+              let updated = false;
+
+              // 一般平移 - 明細區影響
+              if (detailInsertCount > 0) {
+                 if (sRow >= detailInsertPoint) { sRow += detailInsertCount; updated = true; }
+                 if (eRow >= detailInsertPoint) { eRow += detailInsertCount; updated = true; }
+              }
+
+              // 一般平移與延伸 - Totals區影響
+              if (totalsInsertCount > 0) {
+                 if (sRow >= totalsInsertPoint) { sRow += totalsInsertCount; updated = true; }
+                 
+                 // 【跨列合併延展保護】：若此 merge 原本是跨越 Totals 列垂直向下合併
+                 // (例如 eRow 剛好在插列啟動的第一行上方：totalsInsertPoint - 1)
+                 // 我們必須將其拉長加深，自動包含全部新增進來的幣別列
+                 if (eRow === totalsInsertPoint - 1 && sRow < eRow) {
+                     eRow += totalsInsertCount;
+                     updated = true;
+                 } else if (eRow >= totalsInsertPoint) { 
+                     eRow += totalsInsertCount; 
+                     updated = true; 
+                 }
+              }
+              
+              if (updated) {
+                 const newRef = sRow <= eRow ? `${sCol}${sRow}:${eCol}${eRow}` : `${sCol}${eRow}:${eCol}${sRow}`;
+                 mNode.setAttribute('ref', newRef);
+              }
           });
-          uniqueMerges.forEach((m, ref) => {
-             const mNode = doc.createElement('mergeCell');
-             mNode.setAttribute('ref', ref);
-             mergeCellsNode.appendChild(mNode);
+
+          // Phase B: 局部清除 Totals 區衝突
+          const newTotalsZoneStartRow = currentTotalsBaseRowAfterDetail;
+          const newTotalsZoneEndRow = currentTotalsBaseRowAfterDetail + 1 + totalsInsertCount;
+
+          mNodes.forEach(mNode => {
+              const ref = mNode.getAttribute('ref');
+              if (!ref) return;
+              const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+              if (!match) return;
+              let sRow = parseInt(match[2], 10);
+              let eRow = parseInt(match[4], 10);
+              
+              // 【精確刪除】：只清除 Totals 範圍裡面那些已經因為重疊亂掉的「單列橫向」merge
+              // 不刪跨越多列的結構 (sRow === eRow)，這保證前面展延的垂直合併格被安全保留下來
+              if (sRow >= newTotalsZoneStartRow && eRow <= newTotalsZoneEndRow && sRow === eRow) {
+                  mNode.remove();
+              }
           });
-          mergeCellsNode.setAttribute('count', String(uniqueMerges.size));
+
+          // Phase C: 補回正確結構並防重複
+          const existingRefs = new Set<string>();
+          Array.from(mergeCellsNode.getElementsByTagName('mergeCell')).forEach(mNode => {
+              const ref = mNode.getAttribute('ref');
+              if (ref) existingRefs.add(ref);
+          });
+          
+          const appendMerge = (ref: string) => {
+              if (existingRefs.has(ref)) return; 
+              const mNode = doc.createElement('mergeCell');
+              mNode.setAttribute('ref', ref);
+              mergeCellsNode.appendChild(mNode);
+              existingRefs.add(ref);
+          };
+
+          // 補上所有明細新增列必定要有的橫向 merge
+          for (let i = 0; i < detailInsertCount; i++) {
+              const newRow = detailInsertPoint + i;
+              detailMerges.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
+          }
+
+          // 核心: 獨立修正 Totals 區缺失 merge 的問題，補齊第一層與第二層列
+          totalsTitleMerges.forEach(m => appendMerge(`${m.sC}${newTotalsZoneStartRow}:${m.eC}${newTotalsZoneStartRow}`));
+          
+          // totalsInsertCount 為「額外補插」的空列數。
+          // 0 代表單種幣別只維持原本 1 列，所以 i=0 一定會執行一次來修補原始那列。
+          for (let i = 0; i <= totalsInsertCount; i++) {
+              const newRow = newTotalsZoneStartRow + 1 + i;
+              totalsDataMerges.forEach(m => appendMerge(`${m.sC}${newRow}:${m.eC}${newRow}`));
+          }
+          
+          mergeCellsNode.setAttribute('count', String(existingRefs.size));
+      }
+
+      // 修正 dimension
+      const dimensionNode = doc.getElementsByTagName('dimension')[0];
+      if (dimensionNode) {
+          const ref = dimensionNode.getAttribute('ref');
+          if (ref) {
+             const match = ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/);
+             if (match) {
+                const newEndRow = parseInt(match[4], 10) + detailInsertCount + totalsInsertCount;
+                dimensionNode.setAttribute('ref', `${match[1]}${match[2]}:${match[3]}${newEndRow}`);
+             }
+          }
       }
 
       // --- Patch Print / PageSetup ---
       let pageSetup = doc.getElementsByTagName('pageSetup')[0];
-      if (!pageSetup) {
-         pageSetup = doc.createElement('pageSetup');
-         worksheetNode.appendChild(pageSetup);
+      if (pageSetup) {
+         pageSetup.setAttribute('paperSize', '9');
+         pageSetup.setAttribute('fitToWidth', '1');
+         pageSetup.setAttribute('fitToHeight', '0');
+         pageSetup.setAttribute('orientation', 'portrait');
       }
-      pageSetup.setAttribute('paperSize', '9');
-      pageSetup.setAttribute('fitToWidth', '1');
-      pageSetup.setAttribute('fitToHeight', '0');
-      pageSetup.setAttribute('orientation', 'portrait');
 
       let sheetPr = doc.getElementsByTagName('sheetPr')[0];
       if (!sheetPr) {

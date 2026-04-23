@@ -284,7 +284,8 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       };
 
       const detailInsertPoint = detailStartRow + reservedDetailRows;
-      doRowCloneAndShift(detailInsertPoint, detailInsertCount, detailRow);
+      const detailTemplateRow = detailStartRow + reservedDetailRows - 1; // 10
+      doRowCloneAndShift(detailInsertPoint, detailInsertCount, detailTemplateRow);
       
       const currentTotalsBaseRowAfterDetail = totalsBaseRow + detailInsertCount;
       const totalsInsertPoint = currentTotalsBaseRowAfterDetail + 2; 

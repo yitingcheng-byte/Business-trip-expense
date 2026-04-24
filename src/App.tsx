@@ -200,8 +200,12 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
   onDelete: (id: string) => void,
   key?: string 
 }) {
+  // 紀錄正在匯出的 ID，提供即時 Loading 回饋並防止重複點擊
+  const [exportingId, setExportingId] = useState<string | null>(null);
+
   const exportToExcel = async (report: ExpenseReport) => {
     try {
+      setExportingId(report.id);
       const templateUrl = `${import.meta.env.BASE_URL}templates/expense_template.xlsx`;
       const response = await fetch(templateUrl);
       
@@ -599,11 +603,18 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       });
 
       const finalBuffer = await wb.outputAsync();
-      saveAs(new Blob([finalBuffer]), `出差報銷_${report.employeeName}_${report.startDate}.xlsx`);
+      const blob = new Blob([finalBuffer], { 
+  type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+});
+
+saveAs(blob, `business_trip_expense_${report.employeeName}_${report.startDate}.xlsx`);
 
     } catch (e) {
       console.error(e);
       alert(e instanceof Error ? e.message : '匯出失敗，請確認是否已有準備好制式範本檔。');
+    } finally {
+      // 👇 不論成功或失敗，最後都要解除 Loading 狀態
+      setExportingId(null);
     }
   };
 
@@ -714,13 +725,23 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
                           >
                             <ExternalLink size={18} />
                           </button>
-                          <button 
-                            onClick={() => exportToExcel(report)}
-                            className="p-2 text-[#A5A58D] hover:text-[#7C8A71] hover:bg-[#F0F2EE] rounded-lg transition-all"
-                            title="匯出 Excel"
-                          >
-                            <Download size={18} />
-                          </button>
+<button 
+  onClick={() => exportToExcel(report)}
+  disabled={exportingId !== null} 
+  className={cn(
+    "p-2 rounded-lg transition-all flex items-center justify-center min-w-[34px]",
+    exportingId === report.id 
+      ? "text-[#7C8A71] bg-[#F0F2EE] cursor-wait" 
+      : "text-[#A5A58D] hover:text-[#7C8A71] hover:bg-[#F0F2EE]"
+  )}
+  title="匯出 Excel"
+>
+  {exportingId === report.id ? (
+    <div className="w-4 h-4 border-2 border-[#7C8A71] border-t-transparent rounded-full animate-spin" />
+  ) : (
+    <Download size={18} />
+  )}
+</button>
                           <button 
                             onClick={() => onDelete(report.id)}
                             className="p-2 text-[#DCD7CC] hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"

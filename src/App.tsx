@@ -12,7 +12,6 @@ import {
   ChevronLeft, 
   History, 
   Calculator,
-  Building2,
   User,
   Calendar,
   MapPin,
@@ -155,7 +154,7 @@ export default function App() {
               className="bg-white/10 hover:bg-white/20 border border-white/30 text-white px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2"
             >
               <Plus size={18} />
-              <span>建立新報銷單</span>
+              <span className="hidden sm:inline">建立新報銷單</span>
             </button>
           )}
         </div>
@@ -187,7 +186,7 @@ export default function App() {
 
       <footer className="max-w-7xl mx-auto px-4 py-8 border-t border-[#DCD7CC] mt-12 flex items-center justify-between text-[10px] text-[#A5A58D] uppercase tracking-widest">
         <p>© 2026 出差費用報銷系統 · 財務暨投資管理中心</p>
-        <p>系統版本 2.4.0-Natural</p>
+        <p>系統版本 2.5.0-MobileUI</p>
       </footer>
     </div>
   );
@@ -200,7 +199,6 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
   onDelete: (id: string) => void,
   key?: string 
 }) {
-  // 紀錄正在匯出的 ID，提供即時 Loading 回饋並防止重複點擊
   const [exportingId, setExportingId] = useState<string | null>(null);
 
   const exportToExcel = async (report: ExpenseReport) => {
@@ -219,7 +217,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       // 1. Calculations
       const detailStartRow = 5;
       const reservedDetailRows = 6; 
-      const templateTotalsDataRow = 12;
+      const templateTotalsDataRow = 12; // 修正為 12 列
       
       const numItems = report.items.length;
       const detailInsertCount = Math.max(0, numItems - reservedDetailRows);
@@ -254,7 +252,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       // Drawing 移位
       const doRowCloneAndShift = (insertAt: number, shiftCount: number, cloneRow: number) => {
           if (shiftCount <= 0) return;
-          const rows = Array.from(sheetData.getElementsByTagName('row')); // 每次執行前即時抓取最新 row 節點
+          const rows = Array.from(sheetData.getElementsByTagName('row'));
           rows.forEach(row => {
             const rAttr = parseInt(row.getAttribute('r') || '0', 10);
             if (rAttr >= insertAt) {
@@ -288,7 +286,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       };
 
       const detailInsertPoint = detailStartRow + reservedDetailRows;
-      const detailTemplateRow = detailStartRow + reservedDetailRows - 1; // 10
+      const detailTemplateRow = detailStartRow + reservedDetailRows - 1;
       doRowCloneAndShift(detailInsertPoint, detailInsertCount, detailTemplateRow);
       
       const currentTotalsDataRow = templateTotalsDataRow + detailInsertCount;
@@ -315,13 +313,11 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
 
       // 增量修補 2: 處理 mergeCells
       if (mergeCellsNode) {
-          // 定義區域邊界 (原始 Template 座標系統)
-          const originalDetailEnd = detailStartRow + reservedDetailRows - 1; // == 10
-          const originalFooterStart = templateTotalsDataRow + 1;
+          const originalDetailEnd = detailStartRow + reservedDetailRows - 1;
+          const originalFooterStart = templateTotalsDataRow + 1; // == 13
 
           let mNodes = Array.from(mergeCellsNode.getElementsByTagName('mergeCell'));
 
-          // Phase A: 位移與延展處理
           mNodes.forEach(mNode => {
               const ref = mNode.getAttribute('ref');
               if (!ref) return;
@@ -331,13 +327,8 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               let sCol = match[1], sRow = parseInt(match[2], 10);
               let eCol = match[3], eRow = parseInt(match[4], 10);
               
-              // 【明確保護 1：表頭 / Logo / 文件等級 / ISO 區】
-              // 若儲存格的起始與結束皆落在 10 以前 (即明細區與其上方)，絕對不變更它
               if (sRow <= originalDetailEnd && eRow <= originalDetailEnd) return;
 
-              // 【明確保護 2：簽核區 / 會辦單位區】
-              // 若完全落在原本 Totals (11~12) 下方(例如 13+)，對內部結構 100% 保留
-              // 只做隨明細與幣別變化的整體座標加總「下推平移」
               if (sRow >= originalFooterStart) {
                   sRow += (detailInsertCount + totalsInsertCount);
                   eRow += (detailInsertCount + totalsInsertCount);
@@ -347,19 +338,14 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
 
               let updated = false;
 
-              // 一般平移 - 明細區影響
               if (detailInsertCount > 0) {
                  if (sRow >= detailInsertPoint) { sRow += detailInsertCount; updated = true; }
                  if (eRow >= detailInsertPoint) { eRow += detailInsertCount; updated = true; }
               }
 
-              // 一般平移與延伸 - Totals區影響
               if (totalsInsertCount > 0) {
                  if (sRow >= totalsInsertPoint) { sRow += totalsInsertCount; updated = true; }
                  
-                 // 【跨列合併延展保護】：若此 merge 原本是跨越 Totals 列垂直向下合併
-                 // (例如 eRow 剛好在插列啟動的第一行上方：totalsInsertPoint - 1)
-                 // 我們必須將其拉長加深，自動包含全部新增進來的幣別列
                  if (eRow === totalsInsertPoint - 1 && sRow < eRow) {
                      eRow += totalsInsertCount;
                      updated = true;
@@ -375,7 +361,6 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               }
           });
 
-          // Phase C: 依固定座標重建新增的 merge (防重疊與重複)
           const colToInt = (col: string) => col.split('').reduce((acc, char) => acc * 26 + char.charCodeAt(0) - 64, 0);
           
           const existingMerges: { sCol: number, eCol: number, sRow: number, eRow: number, ref: string, node: Element }[] = [];
@@ -400,15 +385,13 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               const nSCol = colToInt(sCol), nSRow = targetRow;
               const nECol = colToInt(eCol), nERow = targetRow;
 
-              // 矩形交集檢查：若欲寫入的新 merge 與現有 merge 強碰，自動將舊有衝突 merge 拔除 (局部清除原則)
               for (let j = existingMerges.length - 1; j >= 0; j--) {
                   const m = existingMerges[j];
                   const overlapX = Math.max(nSCol, m.sCol) <= Math.min(nECol, m.eCol);
                   const overlapY = Math.max(nSRow, m.sRow) <= Math.min(nERow, m.eRow);
                   if (overlapX && overlapY) {
-                      if (m.ref === ref) return; // 完全一樣就跳過
+                      if (m.ref === ref) return;
                       
-                      // 發現重疊 (不論是本列橫向還是跨列)，全部先局部刪除舊殘留
                       if (m.node.parentNode) {
                           m.node.parentNode.removeChild(m.node);
                       }
@@ -416,13 +399,11 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
                   }
               }
               
-              // 修正：使用現有的 namespace 或克隆現有的 node 來確保 Excel 辨識 mergeCell 標籤
               let mNode: Element;
               const firstMerge = existingMerges.length > 0 ? existingMerges[0].node : null;
               if (firstMerge) {
                   mNode = firstMerge.cloneNode(false) as Element;
               } else {
-                  // Fallback: Excel JSZip default NS
                   const ns = mergeCellsNode.namespaceURI || 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
                   mNode = doc.createElementNS(ns, 'mergeCell');
               }
@@ -432,8 +413,6 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               existingMerges.push({sCol: nSCol, sRow: nSRow, eCol: nECol, eRow: nERow, ref, node: mNode});
           };
 
-          // 任務 A: 負責新增明細列固定 merge
-          // 當明細 > 6 筆，將固定座標 merge 新增到每一个被插人的列
           const detailFixedSpans = [
               ['A','B'], ['C','F'], ['G','L'], ['M','N'], ['O','P'], 
               ['Q','R'], ['S','T'], ['U','V'], ['W','X'], ['Y','AA'], ['AB','AD']
@@ -443,12 +422,10 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
               detailFixedSpans.forEach(span => appendMerge(span[0], span[1], newRow));
           }
 
-          // 任務 B: 負責 totals 區固定 merge
-          // 使用固定座標針對 Totals 資料列建立幣別與合計
           const totalsFixedSpans = [
-              ['F','G'], ['H','J'],   // 費用報支合計
-              ['P','Q'], ['R','T'],   // 已先預支費用
-              ['Z','AA'], ['AB','AD'] // 應付員工或員工繳回
+              ['F','G'], ['H','J'],   
+              ['P','Q'], ['R','T'],   
+              ['Z','AA'], ['AB','AD'] 
           ];
           for (let i = 0; i <= totalsInsertCount; i++) {
               totalsFixedSpans.forEach(span => appendMerge(span[0], span[1], currentTotalsDataRow + i));
@@ -577,7 +554,7 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
       }
 
       // Generate Totals Data
-      const totalsDataRowStart = currentTotalsDataRow; // 12 (剛剛已改為 12)
+      const totalsDataRowStart = currentTotalsDataRow; // 12
       
       // 1. 處理「費用報支合計」(F、H 欄)
       Object.entries(expenseTotals).forEach(([curr, amt], i) => {
@@ -604,16 +581,16 @@ function Dashboard({ reports, onNew, onEdit, onDelete }: {
 
       const finalBuffer = await wb.outputAsync();
       const blob = new Blob([finalBuffer], { 
-  type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-});
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      });
 
-saveAs(blob, `business_trip_expense_${report.employeeName}_${report.startDate}.xlsx`);
+      saveAs(blob, `business_trip_expense_${report.employeeName}_${report.startDate}.xlsx`);
 
     } catch (e) {
       console.error(e);
       alert(e instanceof Error ? e.message : '匯出失敗，請確認是否已有準備好制式範本檔。');
     } finally {
-      // 👇 不論成功或失敗，最後都要解除 Loading 狀態
+      // 不論成功或失敗，最後都要解除 Loading 狀態
       setExportingId(null);
     }
   };
@@ -671,92 +648,143 @@ saveAs(blob, `business_trip_expense_${report.employeeName}_${report.startDate}.x
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-[#FDFBF7] text-[10px] font-bold text-[#7C8A71] uppercase tracking-widest border-b border-[#E5E1D8]">
-                  <th className="px-6 py-4">提交日期</th>
-                  <th className="px-6 py-4">出差人 / 部門</th>
-                  <th className="px-6 py-4">期間</th>
-                  <th className="px-6 py-4 text-right">費用累計 (幣別)</th>
-                  <th className="px-6 py-4 text-center">操作</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#F0EFEC]">
-                {reports.map((report) => {
-                  const totalsByCurrency = report.items.reduce((acc, item) => {
-                    acc[item.currency] = (acc[item.currency] || 0) + item.amount;
-                    return acc;
-                  }, {} as Record<string, number>);
+          <>
+            {/* 👇 手機版：卡片式排版 (常駐顯示按鈕) */}
+            <div className="block md:hidden p-4 space-y-4 bg-[#FDFBF7]">
+              {reports.map((report) => {
+                const totalsByCurrency = report.items.reduce((acc, item) => {
+                  acc[item.currency] = (acc[item.currency] || 0) + item.amount;
+                  return acc;
+                }, {} as Record<string, number>);
 
-                  return (
-                    <tr key={report.id} className="hover:bg-[#FDFCF8] transition-colors group">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-sm font-medium text-[#3D3D33]">{report.submitDate}</span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-bold text-[#3D3D33]">{report.employeeName}</span>
-                          <span className="text-xs text-[#A5A58D]">{report.unit} / {report.department}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2 text-xs text-[#3D3D33] bg-[#F0F2EE] px-2 py-1 rounded w-fit border border-[#DCD7CC]/50">
-                          <span>{report.startDate}</span>
-                          <span className="text-[#A5A58D]">~</span>
-                          <span>{report.endDate}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex flex-col gap-1">
-                          {Object.entries(totalsByCurrency).map(([curr, amt]) => (
-                            <span key={curr} className="text-sm font-mono font-bold text-[#4F5946]">
-                              {curr} {amt.toLocaleString()}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <button 
-                            onClick={() => onEdit(report)}
-                            className="p-2 text-[#A5A58D] hover:text-[#7C8A71] hover:bg-[#F0F2EE] rounded-lg transition-all"
-                            title="查看 / 編輯"
-                          >
-                            <ExternalLink size={18} />
-                          </button>
-<button 
-  onClick={() => exportToExcel(report)}
-  disabled={exportingId !== null} 
-  className={cn(
-    "p-2 rounded-lg transition-all flex items-center justify-center min-w-[34px]",
-    exportingId === report.id 
-      ? "text-[#7C8A71] bg-[#F0F2EE] cursor-wait" 
-      : "text-[#A5A58D] hover:text-[#7C8A71] hover:bg-[#F0F2EE]"
-  )}
-  title="匯出 Excel"
->
-  {exportingId === report.id ? (
-    <div className="w-4 h-4 border-2 border-[#7C8A71] border-t-transparent rounded-full animate-spin" />
-  ) : (
-    <Download size={18} />
-  )}
-</button>
-                          <button 
-                            onClick={() => onDelete(report.id)}
-                            className="p-2 text-[#DCD7CC] hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                            title="刪除記錄"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                return (
+                  <div key={report.id} className="bg-white p-5 rounded-xl border border-[#DCD7CC] shadow-sm relative">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <span className="text-[10px] font-bold text-[#A5A58D] mb-1 block">提交日: {report.submitDate}</span>
+                        <h3 className="font-bold text-[#3D3D33]">{report.employeeName}</h3>
+                        <p className="text-[10px] text-[#A5A58D]">{report.unit} / {report.department}</p>
+                      </div>
+                      
+                      {/* 手機版常駐按鈕區塊 (無 opacity-0 隱藏邏輯) */}
+                      <div className="flex bg-[#F8F7F2] rounded-lg p-0.5 border border-[#E5E1D8]">
+                        <button onClick={() => onEdit(report)} className="p-2 text-[#A5A58D] active:bg-[#E5E1D8] rounded-md transition-colors"><ExternalLink size={16} /></button>
+                        <button 
+                          onClick={() => exportToExcel(report)}
+                          disabled={exportingId !== null} 
+                          className={cn("p-2 rounded-md transition-colors", exportingId === report.id ? "text-[#7C8A71] bg-[#E8EDE4]" : "text-[#A5A58D] active:bg-[#E5E1D8]")}
+                        >
+                          {exportingId === report.id ? <div className="w-4 h-4 border-2 border-[#7C8A71] border-t-transparent rounded-full animate-spin" /> : <Download size={16} />}
+                        </button>
+                        <button onClick={() => onDelete(report.id)} className="p-2 text-[#DCD7CC] active:bg-[#fee2e2] active:text-red-500 rounded-md transition-colors"><Trash2 size={16} /></button>
+                      </div>
+                    </div>
+
+                    <div className="bg-[#FDFBF7] p-3 rounded-lg border border-[#E5E1D8] mb-3">
+                      <p className="text-[10px] text-[#A5A58D] uppercase tracking-widest mb-1">出差期間</p>
+                      <p className="text-xs font-medium text-[#3D3D33]">{report.startDate} <span className="text-[#A5A58D] mx-1">~</span> {report.endDate}</p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-3 border-t border-[#F0EFEC]">
+                      {Object.entries(totalsByCurrency).map(([curr, amt]) => (
+                        <span key={curr} className="text-xs font-mono font-bold text-[#4F5946] bg-[#F0F2EE] px-2 py-1 rounded">
+                          {curr} {amt.toLocaleString()}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 👇 電腦版：維持原本的表格排版 */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-[#FDFBF7] text-[10px] font-bold text-[#7C8A71] uppercase tracking-widest border-b border-[#E5E1D8]">
+                    <th className="px-6 py-4">提交日期</th>
+                    <th className="px-6 py-4">出差人 / 部門</th>
+                    <th className="px-6 py-4">期間</th>
+                    <th className="px-6 py-4 text-right">費用累計 (幣別)</th>
+                    <th className="px-6 py-4 text-center">操作</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#F0EFEC]">
+                  {reports.map((report) => {
+                    const totalsByCurrency = report.items.reduce((acc, item) => {
+                      acc[item.currency] = (acc[item.currency] || 0) + item.amount;
+                      return acc;
+                    }, {} as Record<string, number>);
+
+                    return (
+                      <tr key={report.id} className="hover:bg-[#FDFCF8] transition-colors group">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="text-sm font-medium text-[#3D3D33]">{report.submitDate}</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-bold text-[#3D3D33]">{report.employeeName}</span>
+                            <span className="text-xs text-[#A5A58D]">{report.unit} / {report.department}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2 text-xs text-[#3D3D33] bg-[#F0F2EE] px-2 py-1 rounded w-fit border border-[#DCD7CC]/50">
+                            <span>{report.startDate}</span>
+                            <span className="text-[#A5A58D]">~</span>
+                            <span>{report.endDate}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex flex-col gap-1">
+                            {Object.entries(totalsByCurrency).map(([curr, amt]) => (
+                              <span key={curr} className="text-sm font-mono font-bold text-[#4F5946]">
+                                {curr} {amt.toLocaleString()}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button 
+                              onClick={() => onEdit(report)}
+                              className="p-2 text-[#A5A58D] hover:text-[#7C8A71] hover:bg-[#F0F2EE] rounded-lg transition-all"
+                              title="查看 / 編輯"
+                            >
+                              <ExternalLink size={18} />
+                            </button>
+                            <button 
+                              onClick={() => exportToExcel(report)}
+                              disabled={exportingId !== null} 
+                              className={cn(
+                                "p-2 rounded-lg transition-all flex items-center justify-center min-w-[34px]",
+                                exportingId === report.id 
+                                  ? "text-[#7C8A71] bg-[#F0F2EE] cursor-wait" 
+                                  : "text-[#A5A58D] hover:text-[#7C8A71] hover:bg-[#F0F2EE]"
+                              )}
+                              title="匯出 Excel"
+                            >
+                              {exportingId === report.id ? (
+                                <div className="w-4 h-4 border-2 border-[#7C8A71] border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <Download size={18} />
+                              )}
+                            </button>
+                            <button 
+                              onClick={() => onDelete(report.id)}
+                              className="p-2 text-[#DCD7CC] hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                              title="刪除記錄"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </motion.div>
@@ -799,9 +827,9 @@ function ExpenseItemModal({ isOpen, item, onClose, onSave }: { isOpen: boolean, 
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.9, y: 20 }}
-        className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-[#DCD7CC] overflow-hidden"
+        className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-[#DCD7CC] overflow-hidden flex flex-col max-h-[90vh]"
       >
-        <div className="bg-[#F8F7F2] p-6 border-b border-[#E5E1D8] flex items-center justify-between">
+        <div className="bg-[#F8F7F2] p-6 border-b border-[#E5E1D8] flex items-center justify-between shrink-0">
           <h3 className="font-bold text-[#3D3D33] flex items-center gap-2">
             <Plus size={18} className="text-[#7C8A71]" />
             新增支出明細
@@ -811,7 +839,7 @@ function ExpenseItemModal({ isOpen, item, onClose, onSave }: { isOpen: boolean, 
           </button>
         </div>
 
-        <div className="p-8 space-y-6 max-h-[70vh] overflow-y-auto custom-scrollbar">
+        <div className="p-6 md:p-8 space-y-6 overflow-y-auto custom-scrollbar">
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-[#7C8A71] uppercase tracking-widest block">日期</label>
@@ -911,18 +939,18 @@ function ExpenseItemModal({ isOpen, item, onClose, onSave }: { isOpen: boolean, 
           </div>
         </div>
 
-        <div className="p-6 bg-[#FDFBF7] border-t border-[#E5E1D8] flex gap-3">
+        <div className="p-4 md:p-6 bg-[#FDFBF7] border-t border-[#E5E1D8] flex gap-3 shrink-0">
           <button 
             type="button"
             onClick={() => onSave(localItem, true)}
-            className="flex-1 bg-white border border-[#7C8A71] text-[#7C8A71] font-bold py-2.5 px-4 rounded-lg text-xs uppercase tracking-widest hover:bg-[#F8F7F2] transition-all flex items-center justify-center gap-2"
+            className="flex-1 bg-white border border-[#7C8A71] text-[#7C8A71] font-bold py-2.5 px-2 rounded-lg text-xs uppercase tracking-widest hover:bg-[#F8F7F2] transition-all flex items-center justify-center gap-1"
           >
             <Save size={14} /> 保存並連續新增
           </button>
           <button 
             type="button"
             onClick={() => onSave(localItem, false)}
-            className="flex-1 bg-[#7C8A71] text-white font-bold py-2.5 px-4 rounded-lg text-xs uppercase tracking-widest hover:bg-[#6A7661] transition-all shadow-md shadow-[#7C8A71]/20 flex items-center justify-center gap-2"
+            className="flex-1 bg-[#7C8A71] text-white font-bold py-2.5 px-2 rounded-lg text-xs uppercase tracking-widest hover:bg-[#6A7661] transition-all shadow-md shadow-[#7C8A71]/20 flex items-center justify-center gap-1"
           >
             完成新增 <ChevronRight size={14} />
           </button>
@@ -931,7 +959,6 @@ function ExpenseItemModal({ isOpen, item, onClose, onSave }: { isOpen: boolean, 
     </div>
   );
 }
-
 
 function ReportForm({ initialData, onCancel, onSubmit }: { 
   initialData: ExpenseReport | null,
@@ -953,7 +980,6 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ExpenseItem | null>(null);
 
-  // Migration for old reports with flat prepaidCurrency/prepaidAmount
   useEffect(() => {
     if (initialData && !initialData.prepaidItems && initialData.prepaidCurrency) {
       setPrepaidItems([{
@@ -1094,7 +1120,7 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
               1. 基本出差資訊
             </h2>
           </div>
-          <div className="p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          <div className="p-6 md:p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
             <div className="space-y-2">
               <label className="text-[10px] font-bold text-[#7C8A71] uppercase tracking-widest block">出差人</label>
               <input 
@@ -1161,12 +1187,12 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
 
         {/* Step 2: Expense Items */}
         <section className="bg-white rounded-xl shadow-sm border border-[#DCD7CC] overflow-hidden">
-          <div className="p-6 border-b border-[#E5E1D8] bg-[#F8F7F2] flex items-center justify-between">
+          <div className="p-4 md:p-6 border-b border-[#E5E1D8] bg-[#F8F7F2] flex flex-col md:flex-row md:items-center justify-between gap-4">
             <h2 className="font-bold text-lg flex items-center gap-2 text-[#3D3D33]">
               <MapPin size={18} className="text-[#7C8A71]" />
               2. 支出明細填寫
             </h2>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center justify-between md:justify-end gap-4">
               <span className="text-[10px] text-[#A5A58D] italic hidden sm:block">專案代號查詢：雲端專案編號清單</span>
               <button 
                 type="button"
@@ -1178,88 +1204,146 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
             </div>
           </div>
           
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#E5E1D8] bg-[#FDFBF7] text-[10px] font-bold text-[#7C8A71] uppercase tracking-widest">
-                  <th className="px-6 py-4 w-32">日期</th>
-                  <th className="px-6 py-4 w-40">地點 / 專案</th>
-                  <th className="px-6 py-4 w-40">類別 / 工具</th>
-                  <th className="px-6 py-4 w-32">金額 / 幣別</th>
-                  <th className="px-6 py-4">費用說明 (備註)</th>
-                  <th className="px-6 py-4 text-center w-24">操作</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#F0EFEC]">
-                {items.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-[#A5A58D] italic text-sm bg-white">
-                      尚未新增任何費用明細，請點擊右上角新增。
-                    </td>
+          <>
+            {/* 👇 手機版：卡片式排版 (常駐顯示按鈕) */}
+            <div className="block md:hidden p-4 space-y-4 bg-[#FDFBF7]">
+              {items.length === 0 && (
+                <div className="text-center text-[#A5A58D] italic text-sm py-8 bg-white rounded-xl border border-[#E5E1D8]">
+                  尚未新增任何費用明細
+                </div>
+              )}
+              <AnimatePresence>
+                {items.map((item) => (
+                  <motion.div 
+                    key={item.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className="bg-white p-5 rounded-xl border border-[#E5E1D8] shadow-sm relative"
+                  >
+                    {/* 手機版常駐按鈕區塊 (帶有實體邊框與陰影，防誤觸) */}
+                    <div className="absolute top-4 right-4 flex items-center gap-2">
+                      <button type="button" onClick={() => { setEditingItem(item); setIsModalOpen(true); }} className="p-2 text-[#A5A58D] bg-[#F8F7F2] rounded-lg border border-[#E5E1D8] shadow-sm active:bg-[#E5E1D8] transition-colors"><Edit2 size={16} /></button>
+                      <button type="button" onClick={() => removeItem(item.id)} className="p-2 text-[#DCD7CC] bg-[#F8F7F2] rounded-lg border border-[#E5E1D8] shadow-sm active:bg-[#fee2e2] active:text-red-500 transition-colors"><Trash2 size={16} /></button>
+                    </div>
+
+                    <div className="mb-3 pr-24">
+                      <span className="text-[10px] font-bold text-[#A5A58D] block">{item.date}</span>
+                      <h3 className="font-bold text-[#3D3D33] mt-0.5 text-lg leading-tight">{item.location}</h3>
+                      <p className="text-[10px] font-mono text-[#A5A58D] mt-1">{item.projectCode || '無專案代號'}</p>
+                    </div>
+
+                    {item.description && (
+                      <p className="text-xs text-[#A5A58D] italic line-clamp-2 mb-3 bg-[#F8F7F2] p-2.5 rounded-lg border border-[#F0EFEC]">
+                        {item.description}
+                      </p>
+                    )}
+
+                    <div className="flex justify-between items-end pt-3 border-t border-[#F0EFEC]">
+                      <div className="flex flex-col gap-1">
+                        <span className="inline-block px-2 py-1 bg-[#F0F2EE] text-[#7C8A71] rounded text-[10px] font-bold w-fit">
+                          {item.category}
+                        </span>
+                        {item.category === '交通費' && (
+                          <span className="text-[10px] text-[#A5A58D]">{item.transportMode}</span>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] font-bold text-[#A5A58D] mr-1">{item.currency}</span>
+                        <span className="font-bold text-xl tracking-tight text-[#3D3D33]">
+                          {item.amount.toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+
+            {/* 👇 電腦版：維持原本的表格排版 */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-[#E5E1D8] bg-[#FDFBF7] text-[10px] font-bold text-[#7C8A71] uppercase tracking-widest">
+                    <th className="px-6 py-4 w-32">日期</th>
+                    <th className="px-6 py-4 w-40">地點 / 專案</th>
+                    <th className="px-6 py-4 w-40">類別 / 工具</th>
+                    <th className="px-6 py-4 w-32">金額 / 幣別</th>
+                    <th className="px-6 py-4">費用說明 (備註)</th>
+                    <th className="px-6 py-4 text-center w-24">操作</th>
                   </tr>
-                )}
-                <AnimatePresence>
-                  {items.map((item) => (
-                    <motion.tr 
-                      key={item.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, x: 20 }}
-                      className="hover:bg-[#FDFCF8] transition-colors group"
-                    >
-                      <td className="px-6 py-4 align-top whitespace-nowrap">
-                        <span className="text-sm font-medium text-[#3D3D33]">{item.date}</span>
+                </thead>
+                <tbody className="divide-y divide-[#F0EFEC]">
+                  {items.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-[#A5A58D] italic text-sm bg-white">
+                        尚未新增任何費用明細，請點擊右上角新增。
                       </td>
-                      <td className="px-6 py-4 align-top">
-                        <div className="flex flex-col">
-                          <span className="text-sm text-[#3D3D33]">{item.location}</span>
-                          <span className="text-[10px] font-mono text-[#A5A58D]">{item.projectCode}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 align-top">
-                        <div className="flex flex-col gap-1">
-                          <span className="inline-block px-1.5 py-0.5 bg-[#F5F5F0] rounded text-[10px] w-fit">{item.category}</span>
-                          {item.category === '交通費' && (
-                            <span className="text-[10px] text-[#A5A58D]">{item.transportMode}</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 align-top">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-bold text-[#3D3D33]">{item.amount.toLocaleString()}</span>
-                          <span className="text-[10px] text-[#A5A58D]">{item.currency}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 align-top">
-                        <p className="text-xs text-[#A5A58D] italic line-clamp-2">{item.description}</p>
-                      </td>
-                      <td className="px-6 py-4 align-top text-center">
-                        <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            type="button"
-                            onClick={() => {
-                              setEditingItem(item);
-                              setIsModalOpen(true);
-                            }}
-                            className="p-1.5 text-[#A5A58D] hover:text-[#7C8A71] hover:bg-[#F0F2EE] rounded transition-all"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                          <button 
-                            type="button"
-                            onClick={() => removeItem(item.id)}
-                            className="p-1.5 text-[#DCD7CC] hover:text-red-500 hover:bg-red-50 rounded transition-all"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </td>
-                    </motion.tr>
-                  ))}
-                </AnimatePresence>
-              </tbody>
-            </table>
-          </div>
+                    </tr>
+                  )}
+                  <AnimatePresence>
+                    {items.map((item) => (
+                      <motion.tr 
+                        key={item.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, x: 20 }}
+                        className="hover:bg-[#FDFCF8] transition-colors group"
+                      >
+                        <td className="px-6 py-4 align-top whitespace-nowrap">
+                          <span className="text-sm font-medium text-[#3D3D33]">{item.date}</span>
+                        </td>
+                        <td className="px-6 py-4 align-top">
+                          <div className="flex flex-col">
+                            <span className="text-sm text-[#3D3D33]">{item.location}</span>
+                            <span className="text-[10px] font-mono text-[#A5A58D]">{item.projectCode}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 align-top">
+                          <div className="flex flex-col gap-1">
+                            <span className="inline-block px-1.5 py-0.5 bg-[#F5F5F0] rounded text-[10px] w-fit">{item.category}</span>
+                            {item.category === '交通費' && (
+                              <span className="text-[10px] text-[#A5A58D]">{item.transportMode}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 align-top">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-bold text-[#3D3D33]">{item.amount.toLocaleString()}</span>
+                            <span className="text-[10px] text-[#A5A58D]">{item.currency}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 align-top">
+                          <p className="text-xs text-[#A5A58D] italic line-clamp-2">{item.description}</p>
+                        </td>
+                        <td className="px-6 py-4 align-top text-center">
+                          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                setEditingItem(item);
+                                setIsModalOpen(true);
+                              }}
+                              className="p-1.5 text-[#A5A58D] hover:text-[#7C8A71] hover:bg-[#F0F2EE] rounded transition-all"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                            <button 
+                              type="button"
+                              onClick={() => removeItem(item.id)}
+                              className="p-1.5 text-[#DCD7CC] hover:text-red-500 hover:bg-red-50 rounded transition-all"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </motion.tr>
+                    ))}
+                  </AnimatePresence>
+                </tbody>
+              </table>
+            </div>
+          </>
         </section>
 
         <ExpenseItemModal 
@@ -1321,9 +1405,9 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
                       <button 
                         type="button"
                         onClick={() => removePrepaidItem(p.id)}
-                        className="p-1.5 text-[#DCD7CC] hover:text-red-500 hover:bg-red-50 rounded transition-all opacity-0 group-hover:opacity-100"
+                        className="p-2 text-[#DCD7CC] hover:text-red-500 bg-[#F8F7F2] md:bg-transparent rounded-lg border border-[#E5E1D8] md:border-transparent shadow-sm md:shadow-none transition-all md:opacity-0 md:group-hover:opacity-100"
                       >
-                        <Trash2 size={14} />
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   ))}
@@ -1332,7 +1416,7 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
             </div>
           </section>
 
-          <section className="bg-[#F8F7F2] rounded-xl border-2 border-dashed border-[#DCD7CC] p-8 space-y-8">
+          <section className="bg-[#F8F7F2] rounded-xl border-2 border-dashed border-[#DCD7CC] p-6 md:p-8 space-y-8">
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <h2 className="font-bold text-[#7C8A71] uppercase tracking-[0.2em] text-xs">費用報支結算</h2>

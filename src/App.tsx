@@ -1262,8 +1262,8 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
 
             <span className="text-[#A5A08F] text-sm font-bold">費用說明</span>
             <span className="text-[#3D3D33] text-[15px] font-semibold leading-relaxed break-words">
-              {item.description || '-'}
-            </span>
+  {item.description?.trim() || item.category}
+</span>
           </div>
         </div>
 

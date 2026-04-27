@@ -1208,7 +1208,7 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
             {/* 👇 手機版：卡片式排版 (常駐顯示按鈕) */}
             <div className="block md:hidden p-4 space-y-4 bg-[#FDFBF7]">
               {items.length === 0 && (
-                <div className="text-center text-[#A5A58D] italic text-sm py-8 bg-white rounded-xl border border-[#E5E1D8]">
+                <div className="text-center text-[#A5A58D] italic text-sm py-8 bg-white rounded-2xl border border-[#E5E1D8]">
                   尚未新增任何費用明細
                 </div>
               )}
@@ -1218,47 +1218,81 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
                     key={item.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="bg-white p-5 rounded-xl border border-[#E5E1D8] shadow-sm relative"
-                  >
-                    {/* 手機版常駐按鈕區塊 (帶有實體邊框與陰影，防誤觸) */}
-                    <div className="absolute top-4 right-4 flex items-center gap-2">
-                      <button type="button" onClick={() => { setEditingItem(item); setIsModalOpen(true); }} className="p-2 text-[#A5A58D] bg-[#F8F7F2] rounded-lg border border-[#E5E1D8] shadow-sm active:bg-[#E5E1D8] transition-colors"><Edit2 size={16} /></button>
-                      <button type="button" onClick={() => removeItem(item.id)} className="p-2 text-[#DCD7CC] bg-[#F8F7F2] rounded-lg border border-[#E5E1D8] shadow-sm active:bg-[#fee2e2] active:text-red-500 transition-colors"><Trash2 size={16} /></button>
-                    </div>
+                    exit={{ opacity: 0, scale: 0.98 }}
+                    className="bg-white rounded-[24px] border border-[#E5E1D8] shadow-[0_2px_10px_rgba(0,0,0,0.06)] p-5 relative"
+      >
+                     {/* 右上角操作按鈕 */}
+        <div className="absolute top-4 right-4 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setEditingItem(item);
+              setIsModalOpen(true);
+            }}
+            className="w-11 h-11 rounded-xl border border-[#E5E1D8] bg-white text-[#8F8C7F] flex items-center justify-center shadow-sm"
+          >
+            <Edit2 size={18} />
+          </button>
+          <button
+            type="button"
+            onClick={() => removeItem(item.id)}
+            className="w-11 h-11 rounded-xl border border-[#F1D7D7] bg-white text-[#C94B42] flex items-center justify-center shadow-sm"
+          >
+            <Trash2 size={18} />
+          </button>
+        </div>
 
-                    <div className="mb-3 pr-24">
-                      <span className="text-[10px] font-bold text-[#A5A58D] block">{item.date}</span>
-                      <h3 className="font-bold text-[#3D3D33] mt-0.5 text-lg leading-tight">{item.location}</h3>
-                      <p className="text-[10px] font-mono text-[#A5A58D] mt-1">{item.projectCode || '無專案代號'}</p>
-                    </div>
+        {/* 資料區 */}
+        <div className="pr-28 space-y-4">
+          <div className="grid grid-cols-[88px_1fr] gap-y-3 items-start">
+            <span className="text-[#A5A08F] text-sm font-bold">日期</span>
+            <span className="text-[#3D3D33] text-[15px] font-semibold">
+              {item.date}
+            </span>
 
-                    {item.description && (
-                      <p className="text-xs text-[#A5A58D] italic line-clamp-2 mb-3 bg-[#F8F7F2] p-2.5 rounded-lg border border-[#F0EFEC]">
-                        {item.description}
-                      </p>
-                    )}
+            <span className="text-[#A5A08F] text-sm font-bold">地點</span>
+            <span className="text-[#3D3D33] text-[15px] font-semibold">
+              {item.location || '-'}
+            </span>
 
-                    <div className="flex justify-between items-end pt-3 border-t border-[#F0EFEC]">
-                      <div className="flex flex-col gap-1">
-                        <span className="inline-block px-2 py-1 bg-[#F0F2EE] text-[#7C8A71] rounded text-[10px] font-bold w-fit">
-                          {item.category}
-                        </span>
-                        {item.category === '交通費' && (
-                          <span className="text-[10px] text-[#A5A58D]">{item.transportMode}</span>
-                        )}
-                      </div>
-                      <div className="text-right">
-                        <span className="text-[10px] font-bold text-[#A5A58D] mr-1">{item.currency}</span>
-                        <span className="font-bold text-xl tracking-tight text-[#3D3D33]">
-                          {item.amount.toLocaleString()}
-                        </span>
-                      </div>
-                    </div>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
+            <span className="text-[#A5A08F] text-sm font-bold">專案代號</span>
+            <span className="text-[#3D3D33] text-[15px] font-semibold">
+              {item.projectCode || '-'}
+            </span>
+
+            <span className="text-[#A5A08F] text-sm font-bold">費用說明</span>
+            <span className="text-[#3D3D33] text-[15px] font-semibold leading-relaxed break-words">
+              {item.description || '-'}
+            </span>
+          </div>
+        </div>
+
+        {/* 中下方分類區 */}
+        <div className="mt-5 pt-4 border-t border-[#EFECE4] flex items-center">
+          <div className="inline-flex items-center px-4 py-2 rounded-xl bg-[#E7F0FB] text-[#4D79B3] text-sm font-bold">
+            {item.category}
+          </div>
+
+          <div className="mx-5 h-8 w-px bg-[#ECE7DD]" />
+
+          <div className="text-[#A5A08F] text-sm font-semibold">
+            {item.category === '交通費' ? item.transportMode : ''}
+          </div>
+        </div>
+
+        {/* 金額區 */}
+        <div className="mt-6 flex justify-end items-end gap-2">
+          <span className="text-[#A5A08F] text-sm font-bold uppercase">
+            {item.currency}
+          </span>
+          <span className="text-[#3D3D33] text-[28px] leading-none font-bold tracking-tight">
+            {Number(item.amount || 0).toLocaleString()}
+          </span>
+        </div>
+      </motion.div>
+    ))}
+  </AnimatePresence>
+</div>
 
             {/* 👇 電腦版：維持原本的表格排版 */}
             <div className="hidden md:block overflow-x-auto">

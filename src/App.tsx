@@ -1092,6 +1092,17 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
     ]));
   }, [expenseTotals, prepaidTotals]);
 
+const groupedItems = items.reduce((acc, item) => {
+  const dateKey = item.date || '未填日期';
+  if (!acc[dateKey]) acc[dateKey] = [];
+  acc[dateKey].push(item);
+  return acc;
+}, {} as Record<string, ExpenseItem[]>);
+
+const groupedEntries = Object.entries(groupedItems).sort((a, b) =>
+  b[0].localeCompare(a[0])
+);
+
   return (
     <motion.div 
       initial={{ opacity: 0, scale: 0.98 }}
@@ -1205,89 +1216,112 @@ function ReportForm({ initialData, onCancel, onSubmit }: {
           </div>
           
           <>
-            {/* 👇 手機版：卡片式排版 (常駐顯示按鈕) */}
-            <div className="block md:hidden p-4 space-y-4 bg-[#FDFBF7]">
-              {items.length === 0 && (
-                <div className="text-center text-[#A5A58D] italic text-sm py-8 bg-white rounded-2xl border border-[#E5E1D8]">
-                  尚未新增任何費用明細
-                </div>
-              )}
-              <AnimatePresence>
-                {items.map((item) => (
-                  <motion.div 
-                    key={item.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    className="bg-white rounded-[24px] border border-[#E5E1D8] shadow-[0_2px_10px_rgba(0,0,0,0.06)] p-5 relative"
+            {/* 👇 手機版：記帳 APP 式明細清單 */}
+<div className="block md:hidden bg-[#FDFBF7] px-3 py-3 space-y-4">
+  {items.length === 0 && (
+    <div className="text-center text-[#A5A58D] italic text-sm py-8 bg-white rounded-xl border border-[#E5E1D8]">
+      尚未新增任何費用明細
+    </div>
+  )}
+
+  <AnimatePresence>
+    {groupedEntries.map(([date, group]) => (
+      <motion.div
+        key={date}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0 }}
+        className="bg-white rounded-2xl border border-[#E5E1D8] shadow-sm overflow-hidden"
       >
-                     {/* 右上角操作按鈕 */}
-        <div className="absolute top-4 right-4 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setEditingItem(item);
-              setIsModalOpen(true);
-            }}
-            className="w-11 h-11 rounded-xl border border-[#E5E1D8] bg-white text-[#8F8C7F] flex items-center justify-center shadow-sm"
-          >
-            <Edit2 size={18} />
-          </button>
-          <button
-            type="button"
-            onClick={() => removeItem(item.id)}
-            className="w-11 h-11 rounded-xl border border-[#F1D7D7] bg-white text-[#C94B42] flex items-center justify-center shadow-sm"
-          >
-            <Trash2 size={18} />
-          </button>
-        </div>
+        {/* 日期標題 */}
+        <div className="px-4 py-3 bg-[#FAF8F4] border-b border-[#EDE8DE] flex items-center justify-between">
+          <div className="text-base font-bold text-[#3D3D33]">
+            {date}
+          </div>
 
-        {/* 資料區 */}
-        <div className="pr-28 space-y-4">
-          <div className="grid grid-cols-[88px_1fr] gap-y-3 items-start">
-            <span className="text-[#A5A08F] text-sm font-bold">日期</span>
-            <span className="text-[#3D3D33] text-[15px] font-semibold">
-              {item.date}
-            </span>
-
-            <span className="text-[#A5A08F] text-sm font-bold">地點</span>
-            <span className="text-[#3D3D33] text-[15px] font-semibold">
-              {item.location || '-'}
-            </span>
-
-            <span className="text-[#A5A08F] text-sm font-bold">專案代號</span>
-            <span className="text-[#3D3D33] text-[15px] font-semibold">
-              {item.projectCode || '-'}
-            </span>
-
-            <span className="text-[#A5A08F] text-sm font-bold">費用說明</span>
-            <span className="text-[#3D3D33] text-[15px] font-semibold leading-relaxed break-words">
-  {item.description?.trim() || item.category}
-</span>
+          <div className="text-[11px] font-medium text-[#A5A58D]">
+            {group.length} 筆
           </div>
         </div>
 
-        {/* 中下方分類區 */}
-        <div className="mt-5 pt-4 border-t border-[#EFECE4] flex items-center">
-          <div className="inline-flex items-center px-4 py-2 rounded-xl bg-[#E7F0FB] text-[#4D79B3] text-sm font-bold">
-            {item.category}
-          </div>
+        {/* 當日明細 */}
+        <div className="divide-y divide-[#F0ECE4]">
+          {group.map((item) => (
+            <div
+              key={item.id}
+              className="px-4 py-3 flex items-start justify-between gap-3"
+            >
+              {/* 左側資訊 */}
+              <div className="flex-1 min-w-0 space-y-1.5">
+                {/* 第一行：類別 + 交通工具 / 幣別金額 */}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="text-[15px] font-bold text-[#3D3D33]">
+                      {item.category}
+                      {item.category === '交通費' && item.transportMode && (
+                        <span className="ml-1.5 text-[13px] font-medium text-[#A5A58D]">
+                          · {item.transportMode}
+                        </span>
+                      )}
+                    </span>
+                  </div>
 
-          <div className="mx-5 h-8 w-px bg-[#ECE7DD]" />
+                  <div className="shrink-0 flex items-baseline gap-1 whitespace-nowrap">
+                    <span className="text-[12px] font-bold text-[#A5A58D] uppercase">
+                      {item.currency}
+                    </span>
+                    <span className="text-[18px] font-bold text-[#3D3D33] tracking-tight">
+                      {Number(item.amount || 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
 
-          <div className="text-[#A5A08F] text-sm font-semibold">
-            {item.category === '交通費' ? item.transportMode : ''}
-          </div>
-        </div>
+                {/* 第二行：地點 + 費用說明 / 專案代號 */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 text-[13px] text-[#7F7A6D] leading-snug truncate">
+                    <span className="font-medium text-[#5B564B]">
+                      {item.location || '-'}
+                    </span>
+                    <span className="mx-1 text-[#C8C2B6]">·</span>
+                    <span>
+                      {item.description?.trim() || item.category}
+                    </span>
+                  </div>
 
-        {/* 金額區 */}
-        <div className="mt-6 flex justify-end items-end gap-2">
-          <span className="text-[#A5A08F] text-sm font-bold uppercase">
-            {item.currency}
-          </span>
-          <span className="text-[#3D3D33] text-[28px] leading-none font-bold tracking-tight">
-            {Number(item.amount || 0).toLocaleString()}
-          </span>
+                  {/* 專案代號沒值時直接不顯示 */}
+                  {item.projectCode?.trim() && (
+                    <div className="shrink-0 text-[12px] text-[#A5A58D] text-right max-w-[110px] truncate">
+                      {item.projectCode.trim()}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 右側操作 */}
+              <div className="shrink-0 flex flex-col gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingItem(item);
+                    setIsModalOpen(true);
+                  }}
+                  className="w-8 h-8 rounded-lg border border-[#E5E1D8] bg-white text-[#A5A58D] flex items-center justify-center active:bg-[#F3F1EB]"
+                  title="編輯"
+                >
+                  <Edit2 size={14} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => removeItem(item.id)}
+                  className="w-8 h-8 rounded-lg border border-[#F1D7D7] bg-white text-[#C86A60] flex items-center justify-center active:bg-[#FDEEEE]"
+                  title="刪除"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </motion.div>
     ))}

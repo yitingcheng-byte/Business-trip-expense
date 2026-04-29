@@ -21,7 +21,9 @@ import {
   ChevronRight,
   X,
   Edit2,
-  Save
+  Save,
+  Camera,
+  Image as ImageIcon
 } from 'lucide-react';
 import { format } from 'date-fns';
 import XlsxPopulate from 'xlsx-populate/browser/xlsx-populate';
@@ -51,6 +53,8 @@ interface ExpenseItem {
   amount: number;
   projectCode: string;
   transportMode: TransportMode;
+  receiptImage?: string;
+  receiptImageName?: string;
 }
 
 interface PrepaidItem {
@@ -936,6 +940,62 @@ function ExpenseItemModal({ isOpen, item, onClose, onSave }: { isOpen: boolean, 
               value={localItem.description}
               onChange={e => setLocalItem({...localItem, description: e.target.value})}
             />
+          </div>
+
+          {/* 新增：收據照片上傳區塊 */}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-[#7C8A71] uppercase tracking-widest block">收據照片</label>
+            {localItem.receiptImage ? (
+              <div className="relative w-full h-[120px] rounded-lg border border-[#E5E1D8] bg-[#FDFBF7] overflow-hidden group flex items-center justify-center p-2">
+                <img 
+                  src={localItem.receiptImage} 
+                  alt={localItem.receiptImageName || '收據照片'} 
+                  className="max-h-full max-w-full object-contain rounded"
+                />
+                <button
+                  type="button"
+                  onClick={() => setLocalItem({ ...localItem, receiptImage: undefined, receiptImageName: undefined })}
+                  className="absolute top-2 right-2 p-1.5 bg-white/90 backdrop-blur text-red-500 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shadow-sm border border-[#E5E1D8]"
+                  title="移除收據"
+                >
+                  <Trash2 size={14} />
+                </button>
+                <div className="absolute bottom-0 inset-x-0 bg-white/80 backdrop-blur-sm px-2 py-1 flex items-center text-[10px] text-[#A5A58D] truncate">
+                  <ImageIcon size={12} className="mr-1 shrink-0" />
+                  <span className="truncate">{localItem.receiptImageName || 'receipt.jpg'}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="relative">
+                <input 
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onloadend = () => {
+                        setLocalItem({
+                          ...localItem, 
+                          receiptImage: reader.result as string,
+                          receiptImageName: file.name
+                        });
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                />
+                <div className="w-full h-[80px] bg-[#FDFBF7] border border-dashed border-[#A5A58D] rounded-lg flex flex-col items-center justify-center text-[#A5A58D] hover:bg-[#F8F7F2] hover:border-[#7C8A71] hover:text-[#7C8A71] transition-all cursor-pointer">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Camera size={16} />
+                    <span className="text-xs font-bold">點擊拍照或上傳收據</span>
+                  </div>
+                  <span className="text-[10px] italic">支援手機相機，僅限圖片格式</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
